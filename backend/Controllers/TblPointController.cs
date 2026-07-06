@@ -1,16 +1,20 @@
-using backend.Data;
+using backend.DTOs;
 using backend.Models;
+using backend.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using NetTopologySuite.Geometries;
 using NetTopologySuite.IO;
+using System.Security.Claims;
 
 namespace backend.Controllers;
 
 public class GeometryRequest
 {
     public string Wkt { get; set; } = "";
+
+    public string Name { get; set; } = "";
+
+    public string Color { get; set; } = "";
 }
 
 [Authorize]
@@ -18,104 +22,166 @@ public class GeometryRequest
 [Route("api/[controller]")]
 public class TblPointController : ControllerBase
 {
-    private readonly AppDbContext _context;
+    private readonly ITblPointService _pointService;
 
-    public TblPointController(AppDbContext context)
+    public TblPointController(ITblPointService pointService)
     {
-        _context = context;
+        _pointService = pointService;
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<TblPoint>>> GetAll()
+    public async Task<ActionResult<IEnumerable<GeometryResponse>>> GetAll()
     {
-        return await _context.TblPoints.ToListAsync();
+        try
+        {
+            var userId = GetUserId();
+
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var points = await _pointService.GetAllAsync(userId.Value);
+
+            return points.Select(ToResponse).ToList();
+        }
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpGet("{id}")]
-    public async Task<ActionResult<TblPoint>> GetById(int id)
+    public async Task<ActionResult<GeometryResponse>> GetById(int id)
     {
-        var point = await _context.TblPoints.FindAsync(id);
-
-        if (point == null)
+        try
         {
-            return NotFound();
-        }
+            var userId = GetUserId();
 
-        return point;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var point = await _pointService.GetByIdAsync(id, userId.Value);
+
+            if (point == null)
+            {
+                return NotFound();
+            }
+
+            return ToResponse(point);
+        }
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpPost]
     public async Task<ActionResult> Create(GeometryRequest request)
     {
-        var geometry = ReadGeometry<Point>(request.Wkt);
-
-        if (geometry == null)
+        try
         {
-            return BadRequest();
+            var userId = GetUserId();
+
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var pointId = await _pointService.CreateAsync(request.Wkt, request.Name, request.Color, userId.Value);
+
+            if (pointId == null)
+            {
+                return BadRequest();
+            }
+
+            return CreatedAtAction(nameof(GetById), new { id = pointId.Value }, new { Id = pointId.Value });
         }
-
-        var point = new TblPoint { Geometry = geometry };
-        _context.TblPoints.Add(point);
-        await _context.SaveChangesAsync();
-
-        return CreatedAtAction(nameof(GetById), new { id = point.Id }, new { point.Id });
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, GeometryRequest request)
     {
-        var point = await _context.TblPoints.FindAsync(id);
-        var geometry = ReadGeometry<Point>(request.Wkt);
-
-        if (point == null)
+        try
         {
-            return NotFound();
-        }
+            var userId = GetUserId();
 
-        if (geometry == null)
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var result = await _pointService.UpdateAsync(id, request.Wkt, request.Name, request.Color, userId.Value);
+
+            if (result == GeometryUpdateResult.NotFound)
+            {
+                return NotFound();
+            }
+
+            if (result == GeometryUpdateResult.InvalidGeometry)
+            {
+                return BadRequest();
+            }
+
+            return NoContent();
+        }
+        catch
         {
-            return BadRequest();
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
         }
-
-        point.Geometry = geometry;
-        await _context.SaveChangesAsync();
-
-        return NoContent();
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var point = await _context.TblPoints.FindAsync(id);
-
-        if (point == null)
-        {
-            return NotFound();
-        }
-
-        _context.TblPoints.Remove(point);
-        await _context.SaveChangesAsync();
-
-        return NoContent();
-    }
-
-    private static T? ReadGeometry<T>(string wkt) where T : Geometry
-    {
-        if (string.IsNullOrWhiteSpace(wkt))
-        {
-            return null;
-        }
-
         try
         {
-            var geometry = new WKTReader().Read(wkt);
-            geometry.SRID = 4326;
+            var userId = GetUserId();
 
-            return geometry as T;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var deleted = await _pointService.DeleteAsync(id, userId.Value);
+
+            if (!deleted)
+            {
+                return NotFound();
+            }
+
+            return NoContent();
         }
         catch
         {
-            return null;
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
         }
+    }
+
+    private int? GetUserId()
+    {
+        var userIdValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        return int.TryParse(userIdValue, out var userId) ? userId : null;
+    }
+
+    private static GeometryResponse ToResponse(TblPoint point)
+    {
+        return new GeometryResponse
+        {
+            Id = point.Id,
+            Type = "Point",
+            Endpoint = "TblPoint",
+            Name = point.Name,
+            Color = point.Color,
+            ModifiedDate = point.ModifiedDate,
+            Wkt = new WKTWriter().Write(point.Geometry)
+        };
     }
 }

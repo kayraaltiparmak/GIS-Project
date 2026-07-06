@@ -1,10 +1,10 @@
-using backend.Data;
+using backend.DTOs;
 using backend.Models;
+using backend.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using NetTopologySuite.Geometries;
 using NetTopologySuite.IO;
+using System.Security.Claims;
 
 namespace backend.Controllers;
 
@@ -13,104 +13,166 @@ namespace backend.Controllers;
 [Route("api/[controller]")]
 public class TblPolygonController : ControllerBase
 {
-    private readonly AppDbContext _context;
+    private readonly ITblPolygonService _polygonService;
 
-    public TblPolygonController(AppDbContext context)
+    public TblPolygonController(ITblPolygonService polygonService)
     {
-        _context = context;
+        _polygonService = polygonService;
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<TblPolygon>>> GetAll()
+    public async Task<ActionResult<IEnumerable<GeometryResponse>>> GetAll()
     {
-        return await _context.TblPolygons.ToListAsync();
+        try
+        {
+            var userId = GetUserId();
+
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var polygons = await _polygonService.GetAllAsync(userId.Value);
+
+            return polygons.Select(ToResponse).ToList();
+        }
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpGet("{id}")]
-    public async Task<ActionResult<TblPolygon>> GetById(int id)
+    public async Task<ActionResult<GeometryResponse>> GetById(int id)
     {
-        var polygon = await _context.TblPolygons.FindAsync(id);
-
-        if (polygon == null)
+        try
         {
-            return NotFound();
-        }
+            var userId = GetUserId();
 
-        return polygon;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var polygon = await _polygonService.GetByIdAsync(id, userId.Value);
+
+            if (polygon == null)
+            {
+                return NotFound();
+            }
+
+            return ToResponse(polygon);
+        }
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpPost]
     public async Task<ActionResult> Create(GeometryRequest request)
     {
-        var geometry = ReadGeometry<Polygon>(request.Wkt);
-
-        if (geometry == null)
+        try
         {
-            return BadRequest();
+            var userId = GetUserId();
+
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var result = await _polygonService.CreateAsync(request.Wkt, request.Name, request.Color, userId.Value);
+
+            if (result == null)
+            {
+                return BadRequest();
+            }
+
+            return CreatedAtAction(nameof(GetById), new { id = result.Id }, new { result.Id, result.InventoryCount });
         }
-
-        var polygon = new TblPolygon { Geometry = geometry };
-        _context.TblPolygons.Add(polygon);
-        await _context.SaveChangesAsync();
-
-        return CreatedAtAction(nameof(GetById), new { id = polygon.Id }, new { polygon.Id });
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, GeometryRequest request)
     {
-        var polygon = await _context.TblPolygons.FindAsync(id);
-        var geometry = ReadGeometry<Polygon>(request.Wkt);
-
-        if (polygon == null)
+        try
         {
-            return NotFound();
-        }
+            var userId = GetUserId();
 
-        if (geometry == null)
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var result = await _polygonService.UpdateAsync(id, request.Wkt, request.Name, request.Color, userId.Value);
+
+            if (result == GeometryUpdateResult.NotFound)
+            {
+                return NotFound();
+            }
+
+            if (result == GeometryUpdateResult.InvalidGeometry)
+            {
+                return BadRequest();
+            }
+
+            return NoContent();
+        }
+        catch
         {
-            return BadRequest();
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
         }
-
-        polygon.Geometry = geometry;
-        await _context.SaveChangesAsync();
-
-        return NoContent();
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var polygon = await _context.TblPolygons.FindAsync(id);
-
-        if (polygon == null)
-        {
-            return NotFound();
-        }
-
-        _context.TblPolygons.Remove(polygon);
-        await _context.SaveChangesAsync();
-
-        return NoContent();
-    }
-
-    private static T? ReadGeometry<T>(string wkt) where T : Geometry
-    {
-        if (string.IsNullOrWhiteSpace(wkt))
-        {
-            return null;
-        }
-
         try
         {
-            var geometry = new WKTReader().Read(wkt);
-            geometry.SRID = 4326;
+            var userId = GetUserId();
 
-            return geometry as T;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var deleted = await _polygonService.DeleteAsync(id, userId.Value);
+
+            if (!deleted)
+            {
+                return NotFound();
+            }
+
+            return NoContent();
         }
         catch
         {
-            return null;
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
         }
+    }
+
+    private int? GetUserId()
+    {
+        var userIdValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        return int.TryParse(userIdValue, out var userId) ? userId : null;
+    }
+
+    private static GeometryResponse ToResponse(TblPolygon polygon)
+    {
+        return new GeometryResponse
+        {
+            Id = polygon.Id,
+            Type = "Polygon",
+            Endpoint = "TblPolygon",
+            Name = polygon.Name,
+            Color = polygon.Color,
+            ModifiedDate = polygon.ModifiedDate,
+            Wkt = new WKTWriter().Write(polygon.Geometry)
+        };
     }
 }

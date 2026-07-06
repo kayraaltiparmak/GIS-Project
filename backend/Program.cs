@@ -1,4 +1,5 @@
 using backend.Data;
+using backend.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
@@ -7,6 +8,11 @@ using System.Text;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+
+builder.Services.AddScoped<ITblPointService, TblPointService>();
+builder.Services.AddScoped<ITblLineService, TblLineService>();
+builder.Services.AddScoped<ITblPolygonService, TblPolygonService>();
+builder.Services.AddScoped<IInventoryAnalysisService, InventoryAnalysisService>();
 
 builder.Services.AddCors(options =>
 {

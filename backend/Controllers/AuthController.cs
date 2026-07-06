@@ -25,47 +25,55 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login(LoginRequest request)
     {
-        var user = await _context.Users
-            .FirstOrDefaultAsync(u =>
-                u.Username == request.Username &&
-                u.IsActive == true &&
-                u.IsDeleted == false);
-
-        if (user == null || !IsPasswordValid(request.Password, user.Password))
+        try
         {
-            return Unauthorized("Kullanici adi veya sifre hatali.");
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u =>
+                    u.Username == request.Username &&
+                    u.IsActive == true &&
+                    u.IsDeleted == false);
+
+            if (user == null || !IsPasswordValid(request.Password, user.Password))
+            {
+                return Unauthorized("Kullanici adi veya sifre hatali.");
+            }
+
+            if (!IsBCryptHash(user.Password))
+            {
+                user.Password = BCrypt.Net.BCrypt.HashPassword(request.Password);
+                user.ModifiedDate = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+            }
+
+            var claims = new[]
+            {
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim(ClaimTypes.Name, user.Username)
+            };
+
+            var key = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]!));
+
+            var creds = new SigningCredentials(
+                key,
+                SecurityAlgorithms.HmacSha256);
+
+            var token = new JwtSecurityToken(
+                issuer: _configuration["Jwt:Issuer"],
+                audience: _configuration["Jwt:Audience"],
+                claims: claims,
+                expires: DateTime.Now.AddMinutes(10),
+                signingCredentials: creds);
+
+            return Ok(new
+            {
+                token = new JwtSecurityTokenHandler().WriteToken(token)
+            });
         }
-
-        if (!IsBCryptHash(user.Password))
+        catch
         {
-            user.Password = BCrypt.Net.BCrypt.HashPassword(request.Password);
-            user.ModifiedDate = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
         }
-
-        var claims = new[]
-        {
-            new Claim(ClaimTypes.Name, user.Username)
-        };
-
-        var key = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]!));
-
-        var creds = new SigningCredentials(
-            key,
-            SecurityAlgorithms.HmacSha256);
-
-        var token = new JwtSecurityToken(
-            issuer: _configuration["Jwt:Issuer"],
-            audience: _configuration["Jwt:Audience"],
-            claims: claims,
-            expires: DateTime.Now.AddMinutes(5),
-            signingCredentials: creds);
-
-        return Ok(new
-        {
-            token = new JwtSecurityTokenHandler().WriteToken(token)
-        });
     }
 
     private static bool IsPasswordValid(string password, string storedPassword)

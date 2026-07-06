@@ -1,10 +1,10 @@
-using backend.Data;
+using backend.DTOs;
 using backend.Models;
+using backend.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using NetTopologySuite.Geometries;
 using NetTopologySuite.IO;
+using System.Security.Claims;
 
 namespace backend.Controllers;
 
@@ -13,104 +13,166 @@ namespace backend.Controllers;
 [Route("api/[controller]")]
 public class TblLineController : ControllerBase
 {
-    private readonly AppDbContext _context;
+    private readonly ITblLineService _lineService;
 
-    public TblLineController(AppDbContext context)
+    public TblLineController(ITblLineService lineService)
     {
-        _context = context;
+        _lineService = lineService;
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<TblLine>>> GetAll()
+    public async Task<ActionResult<IEnumerable<GeometryResponse>>> GetAll()
     {
-        return await _context.TblLines.ToListAsync();
+        try
+        {
+            var userId = GetUserId();
+
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var lines = await _lineService.GetAllAsync(userId.Value);
+
+            return lines.Select(ToResponse).ToList();
+        }
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpGet("{id}")]
-    public async Task<ActionResult<TblLine>> GetById(int id)
+    public async Task<ActionResult<GeometryResponse>> GetById(int id)
     {
-        var line = await _context.TblLines.FindAsync(id);
-
-        if (line == null)
+        try
         {
-            return NotFound();
-        }
+            var userId = GetUserId();
 
-        return line;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var line = await _lineService.GetByIdAsync(id, userId.Value);
+
+            if (line == null)
+            {
+                return NotFound();
+            }
+
+            return ToResponse(line);
+        }
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpPost]
     public async Task<ActionResult> Create(GeometryRequest request)
     {
-        var geometry = ReadGeometry<LineString>(request.Wkt);
-
-        if (geometry == null)
+        try
         {
-            return BadRequest();
+            var userId = GetUserId();
+
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var lineId = await _lineService.CreateAsync(request.Wkt, request.Name, request.Color, userId.Value);
+
+            if (lineId == null)
+            {
+                return BadRequest();
+            }
+
+            return CreatedAtAction(nameof(GetById), new { id = lineId.Value }, new { Id = lineId.Value });
         }
-
-        var line = new TblLine { Geometry = geometry };
-        _context.TblLines.Add(line);
-        await _context.SaveChangesAsync();
-
-        return CreatedAtAction(nameof(GetById), new { id = line.Id }, new { line.Id });
+        catch
+        {
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
+        }
     }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, GeometryRequest request)
     {
-        var line = await _context.TblLines.FindAsync(id);
-        var geometry = ReadGeometry<LineString>(request.Wkt);
-
-        if (line == null)
+        try
         {
-            return NotFound();
-        }
+            var userId = GetUserId();
 
-        if (geometry == null)
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var result = await _lineService.UpdateAsync(id, request.Wkt, request.Name, request.Color, userId.Value);
+
+            if (result == GeometryUpdateResult.NotFound)
+            {
+                return NotFound();
+            }
+
+            if (result == GeometryUpdateResult.InvalidGeometry)
+            {
+                return BadRequest();
+            }
+
+            return NoContent();
+        }
+        catch
         {
-            return BadRequest();
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
         }
-
-        line.Geometry = geometry;
-        await _context.SaveChangesAsync();
-
-        return NoContent();
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var line = await _context.TblLines.FindAsync(id);
-
-        if (line == null)
-        {
-            return NotFound();
-        }
-
-        _context.TblLines.Remove(line);
-        await _context.SaveChangesAsync();
-
-        return NoContent();
-    }
-
-    private static T? ReadGeometry<T>(string wkt) where T : Geometry
-    {
-        if (string.IsNullOrWhiteSpace(wkt))
-        {
-            return null;
-        }
-
         try
         {
-            var geometry = new WKTReader().Read(wkt);
-            geometry.SRID = 4326;
+            var userId = GetUserId();
 
-            return geometry as T;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var deleted = await _lineService.DeleteAsync(id, userId.Value);
+
+            if (!deleted)
+            {
+                return NotFound();
+            }
+
+            return NoContent();
         }
         catch
         {
-            return null;
+            return StatusCode(500, "Beklenmeyen bir hata olustu.");
         }
+    }
+
+    private int? GetUserId()
+    {
+        var userIdValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        return int.TryParse(userIdValue, out var userId) ? userId : null;
+    }
+
+    private static GeometryResponse ToResponse(TblLine line)
+    {
+        return new GeometryResponse
+        {
+            Id = line.Id,
+            Type = "Line",
+            Endpoint = "TblLine",
+            Name = line.Name,
+            Color = line.Color,
+            ModifiedDate = line.ModifiedDate,
+            Wkt = new WKTWriter().Write(line.Geometry)
+        };
     }
 }
