@@ -13,6 +13,8 @@ builder.Services.AddScoped<ITblPointService, TblPointService>();
 builder.Services.AddScoped<ITblLineService, TblLineService>();
 builder.Services.AddScoped<ITblPolygonService, TblPolygonService>();
 builder.Services.AddScoped<IInventoryAnalysisService, InventoryAnalysisService>();
+builder.Services.AddScoped<IUserPermissionService, UserPermissionService>();
+builder.Services.AddScoped<IGeographicPermissionService, GeographicPermissionService>();
 
 builder.Services.AddCors(options =>
 {
@@ -66,5 +68,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+await PermissionSeedService.EnsureRequiredPermissionsAsync(app.Services);
 
 app.Run();

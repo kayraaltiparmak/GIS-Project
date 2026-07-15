@@ -14,10 +14,17 @@ namespace backend.Controllers;
 public class TblPolygonController : ControllerBase
 {
     private readonly ITblPolygonService _polygonService;
+    private readonly IUserPermissionService _userPermissionService;
+    private readonly IGeographicPermissionService _geographicPermissionService;
 
-    public TblPolygonController(ITblPolygonService polygonService)
+    public TblPolygonController(
+        ITblPolygonService polygonService,
+        IUserPermissionService userPermissionService,
+        IGeographicPermissionService geographicPermissionService)
     {
         _polygonService = polygonService;
+        _userPermissionService = userPermissionService;
+        _geographicPermissionService = geographicPermissionService;
     }
 
     [HttpGet]
@@ -79,6 +86,18 @@ public class TblPolygonController : ControllerBase
             if (userId == null)
             {
                 return Unauthorized();
+            }
+
+            if (!await _userPermissionService.HasPermissionAsync(userId.Value, "Polygon.Create"))
+            {
+                return Forbid();
+            }
+
+            var geographicPermission = await _geographicPermissionService.CanCreateGeometryAsync(userId.Value, request.Wkt);
+
+            if (!geographicPermission.IsAllowed)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, geographicPermission.ErrorMessage);
             }
 
             var result = await _polygonService.CreateAsync(request.Wkt, request.Name, request.Color, userId.Value);

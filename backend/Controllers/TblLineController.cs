@@ -14,10 +14,17 @@ namespace backend.Controllers;
 public class TblLineController : ControllerBase
 {
     private readonly ITblLineService _lineService;
+    private readonly IUserPermissionService _userPermissionService;
+    private readonly IGeographicPermissionService _geographicPermissionService;
 
-    public TblLineController(ITblLineService lineService)
+    public TblLineController(
+        ITblLineService lineService,
+        IUserPermissionService userPermissionService,
+        IGeographicPermissionService geographicPermissionService)
     {
         _lineService = lineService;
+        _userPermissionService = userPermissionService;
+        _geographicPermissionService = geographicPermissionService;
     }
 
     [HttpGet]
@@ -79,6 +86,18 @@ public class TblLineController : ControllerBase
             if (userId == null)
             {
                 return Unauthorized();
+            }
+
+            if (!await _userPermissionService.HasPermissionAsync(userId.Value, "Line.Create"))
+            {
+                return Forbid();
+            }
+
+            var geographicPermission = await _geographicPermissionService.CanCreateGeometryAsync(userId.Value, request.Wkt);
+
+            if (!geographicPermission.IsAllowed)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, geographicPermission.ErrorMessage);
             }
 
             var lineId = await _lineService.CreateAsync(request.Wkt, request.Name, request.Color, userId.Value);

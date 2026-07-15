@@ -1,29 +1,56 @@
 import { useState } from "react";
 
 const LOGIN_URL = "http://localhost:5291/api/Auth/login";
+const REGISTER_URL = "http://localhost:5291/api/Auth/register";
 
 function Login({ onLogin, sessionMessage }) {
+  const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const isRegisterMode = mode === "register";
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
+
+    const trimmedUsername = username.trim();
+
+    if (!trimmedUsername || !password) {
+      setError("Kullanıcı adı ve şifre zorunlu.");
+      return;
+    }
+
+    if (isRegisterMode && password.length < 6) {
+      setError("Şifre en az 6 karakter olmalı.");
+      return;
+    }
+
+    if (isRegisterMode && password !== confirmPassword) {
+      setError("Şifreler eşleşmiyor.");
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      const response = await fetch(LOGIN_URL, {
+      const response = await fetch(isRegisterMode ? REGISTER_URL : LOGIN_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username: trimmedUsername, password })
       });
 
       if (!response.ok) {
-        setError("Kullanıcı adı veya şifre hatalı.");
+        if (isRegisterMode && response.status === 409) {
+          setError("Bu kullanıcı adı zaten kullanılıyor.");
+          return;
+        }
+
+        setError(isRegisterMode ? "Kayıt oluşturulamadı." : "Kullanıcı adı veya şifre hatalı.");
         return;
       }
 
@@ -40,6 +67,13 @@ function Login({ onLogin, sessionMessage }) {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  function switchMode(nextMode) {
+    setMode(nextMode);
+    setError("");
+    setPassword("");
+    setConfirmPassword("");
   }
 
   return (
@@ -60,8 +94,25 @@ function Login({ onLogin, sessionMessage }) {
       <section className="login-panel">
         <div className="login-card">
           <div className="login-header">
-            <span className="login-kicker">GÜVENLİ GİRİŞ</span>
-            <h2>Hesabınıza giriş yapın</h2>
+            <span className="login-kicker">{isRegisterMode ? "YENİ HESAP" : "GÜVENLİ GİRİŞ"}</span>
+            <h2>{isRegisterMode ? "Yeni hesap oluşturun" : "Hesabınıza giriş yapın"}</h2>
+          </div>
+
+          <div className="auth-switch" aria-label="Oturum modu">
+            <button
+              type="button"
+              className={!isRegisterMode ? "active-auth-mode" : ""}
+              onClick={() => switchMode("login")}
+            >
+              Giriş
+            </button>
+            <button
+              type="button"
+              className={isRegisterMode ? "active-auth-mode" : ""}
+              onClick={() => switchMode("register")}
+            >
+              Üye ol
+            </button>
           </div>
 
           <form className="login-form" onSubmit={handleSubmit}>
@@ -79,8 +130,21 @@ function Login({ onLogin, sessionMessage }) {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
+              autoComplete={isRegisterMode ? "new-password" : "current-password"}
             />
+
+            {isRegisterMode && (
+              <>
+                <label htmlFor="confirm-password">Şifre tekrar</label>
+                <input
+                  id="confirm-password"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  autoComplete="new-password"
+                />
+              </>
+            )}
 
             <div className="message-slot">
               {error && <p className="error-message">{error}</p>}
@@ -90,7 +154,9 @@ function Login({ onLogin, sessionMessage }) {
             </div>
 
             <button type="submit" className="primary-button" disabled={isLoading}>
-              {isLoading ? "Giris yapiliyor" : "Giris Yap"}
+              {isLoading
+                ? (isRegisterMode ? "Kayıt oluşturuluyor" : "Giriş yapılıyor")
+                : (isRegisterMode ? "Üye Ol" : "Giriş Yap")}
             </button>
           </form>
         </div>

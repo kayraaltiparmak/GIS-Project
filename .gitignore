@@ -1,0 +1,22 @@
+# .NET build output
+backend/bin/
+backend/obj/
+backend/*build-check*/
+backend/**/build-check/
+backend/**/admin-build-check/
+backend/**/admin-build-check-2/
+backend/**/geo-build-check/
+
+# Frontend build/cache output
+frontend/dist/
+frontend/node_modules/
+frontend/.npm-cache/
+
+# Local/editor files
+.vs/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.user
+*.suo
+*.log

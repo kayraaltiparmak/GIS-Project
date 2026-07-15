@@ -23,10 +23,17 @@ public class GeometryRequest
 public class TblPointController : ControllerBase
 {
     private readonly ITblPointService _pointService;
+    private readonly IUserPermissionService _userPermissionService;
+    private readonly IGeographicPermissionService _geographicPermissionService;
 
-    public TblPointController(ITblPointService pointService)
+    public TblPointController(
+        ITblPointService pointService,
+        IUserPermissionService userPermissionService,
+        IGeographicPermissionService geographicPermissionService)
     {
         _pointService = pointService;
+        _userPermissionService = userPermissionService;
+        _geographicPermissionService = geographicPermissionService;
     }
 
     [HttpGet]
@@ -88,6 +95,18 @@ public class TblPointController : ControllerBase
             if (userId == null)
             {
                 return Unauthorized();
+            }
+
+            if (!await _userPermissionService.HasPermissionAsync(userId.Value, "Point.Create"))
+            {
+                return Forbid();
+            }
+
+            var geographicPermission = await _geographicPermissionService.CanCreateGeometryAsync(userId.Value, request.Wkt);
+
+            if (!geographicPermission.IsAllowed)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, geographicPermission.ErrorMessage);
             }
 
             var pointId = await _pointService.CreateAsync(request.Wkt, request.Name, request.Color, userId.Value);
