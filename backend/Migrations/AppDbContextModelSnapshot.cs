@@ -250,7 +250,126 @@ namespace backend.Migrations
                             IsDeleted = false,
                             ModifiedDate = new DateTime(2026, 7, 8, 0, 0, 0, 0, DateTimeKind.Utc),
                             Name = "Yetki yönetimi yetkisi"
+                        },
+                        new
+                        {
+                            Id = 14,
+                            Code = "Heatmap.Analyze",
+                            CreatedDate = new DateTime(2026, 7, 8, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Description = "GeoServer üzerinden ısı haritası analizi yapma yetkisi",
+                            IsActive = true,
+                            IsDeleted = false,
+                            ModifiedDate = new DateTime(2026, 7, 8, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "Isı Haritası Analizi"
                         });
+                });
+
+            modelBuilder.Entity("backend.Models.TblPoi", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("CategoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Point>("Geometry")
+                        .IsRequired()
+                        .HasColumnType("geometry(Point,4326)");
+
+                    b.Property<string>("IconKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("ModifiedDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ModifiedUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("WorkingHours")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CategoryId");
+
+                    b.HasIndex("ModifiedUserId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("TblPois");
+                });
+
+            modelBuilder.Entity("backend.Models.TblPoiCategory", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("CreatedUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("IconKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("ModifiedDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ModifiedUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int?>("ParentId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedUserId");
+
+                    b.HasIndex("ModifiedUserId");
+
+                    b.HasIndex("ParentId", "Name");
+
+                    b.ToTable("TblPoiCategories");
                 });
 
             modelBuilder.Entity("backend.Models.TblPoint", b =>
@@ -570,6 +689,56 @@ namespace backend.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("backend.Models.TblPoi", b =>
+                {
+                    b.HasOne("backend.Models.TblPoiCategory", "Category")
+                        .WithMany()
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("backend.Models.User", "ModifiedUser")
+                        .WithMany()
+                        .HasForeignKey("ModifiedUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("backend.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+
+                    b.Navigation("ModifiedUser");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("backend.Models.TblPoiCategory", b =>
+                {
+                    b.HasOne("backend.Models.User", "CreatedUser")
+                        .WithMany()
+                        .HasForeignKey("CreatedUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("backend.Models.User", "ModifiedUser")
+                        .WithMany()
+                        .HasForeignKey("ModifiedUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("backend.Models.TblPoiCategory", "Parent")
+                        .WithMany("Children")
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("CreatedUser");
+
+                    b.Navigation("ModifiedUser");
+
+                    b.Navigation("Parent");
+                });
+
             modelBuilder.Entity("backend.Models.TblPoint", b =>
                 {
                     b.HasOne("backend.Models.User", "ModifiedUser")
@@ -674,6 +843,11 @@ namespace backend.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Role");
+                });
+
+            modelBuilder.Entity("backend.Models.TblPoiCategory", b =>
+                {
+                    b.Navigation("Children");
                 });
 #pragma warning restore 612, 618
         }

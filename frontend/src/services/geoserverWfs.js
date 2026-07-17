@@ -4,6 +4,7 @@ import {
   GEOSERVER_DISABLE_CQL_FILTER,
   GEOSERVER_DEBUG,
   GEOSERVER_LAYERS,
+  GEOSERVER_POI_CQL_FIELDS,
   GEOSERVER_WFS_URL
 } from "../config/geoserver";
 
@@ -15,6 +16,15 @@ export function buildUserCqlFilter(userId) {
   }
 
   return GEOSERVER_CQL_FIELDS.isDeleted + " = false AND " + GEOSERVER_CQL_FIELDS.userId + " = " + Number(userId);
+}
+
+export function buildLayerCqlFilter(type, userId) {
+  if (type === "Poi") return buildPoiCqlFilter();
+  return buildUserCqlFilter(userId);
+}
+
+export function buildPoiCqlFilter() {
+  return GEOSERVER_POI_CQL_FIELDS.isDeleted + " = false AND " + GEOSERVER_POI_CQL_FIELDS.isActive + " = true";
 }
 
 export async function getFeaturesFromLayer({ type, cqlFilter, bbox, maxFeatures = 20 }) {
@@ -61,9 +71,14 @@ export async function getFeaturesFromLayer({ type, cqlFilter, bbox, maxFeatures 
   });
 }
 
-export async function getFeaturesFromLayers({ types, cqlFilter, bbox, maxFeatures = 20 }) {
+export async function getFeaturesFromLayers({ types, cqlFilter, userId, bbox, maxFeatures = 20 }) {
   const groups = await Promise.all(
-    types.map((type) => getFeaturesFromLayer({ type, cqlFilter, bbox, maxFeatures }))
+    types.map((type) => getFeaturesFromLayer({
+      type,
+      cqlFilter: type === "Poi" || userId ? buildLayerCqlFilter(type, userId) : cqlFilter,
+      bbox,
+      maxFeatures
+    }))
   );
 
   return groups.flatMap((features, index) =>

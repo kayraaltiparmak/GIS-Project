@@ -1,6 +1,8 @@
 ﻿import { useEffect, useRef, useState } from "react";
 import "ol/ol.css";
 import OLMap from "ol/Map";
+import Feature from "ol/Feature";
+import PointGeometry from "ol/geom/Point";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
@@ -18,15 +20,17 @@ import Style from "ol/style/Style";
 import Stroke from "ol/style/Stroke";
 import Fill from "ol/style/Fill";
 import CircleStyle from "ol/style/Circle";
+import Icon from "ol/style/Icon";
 import { unByKey } from "ol/Observable";
 import Navbar from "./Navbar";
 import {
   GEOSERVER_DEBUG,
   GEOSERVER_HEATMAP_STYLE,
   GEOSERVER_LAYERS,
+  GEOSERVER_POI_STYLE,
   GEOSERVER_WMS_URL
 } from "../config/geoserver";
-import { buildUserCqlFilter, getFeaturesFromLayers } from "../services/geoserverWfs";
+import { buildLayerCqlFilter, buildUserCqlFilter, getFeaturesFromLayers } from "../services/geoserverWfs";
 
 const TOKEN_KEY = "token";
 const TURKEY_CENTER = [35.2433, 38.9637];
@@ -64,6 +68,7 @@ const CUSTOM_COLOR_PALETTE = [
 ];
 
 const drawSettings = {
+  Poi: { drawType: "Point", endpoint: "Pois" },
   Point: { drawType: "Point", endpoint: "TblPoint" },
   Line: { drawType: "LineString", endpoint: "TblLine" },
   Polygon: { drawType: "Polygon", endpoint: "TblPolygon" },
@@ -74,6 +79,7 @@ const WMS_Z_INDEX = {
   Polygon: 10,
   Line: 20,
   Point: 30,
+  Poi: 35,
   Selection: 40,
   Heatmap: 70,
   Analysis: 80
@@ -104,6 +110,10 @@ function createFeatureStyle(color) {
     stroke: new Stroke({ color, width: 3 }),
     fill: new Fill({ color: transparentColor(color) })
   });
+}
+
+function createPoiIconStyle(iconKey = "default") {
+  return new Style({ image: new Icon({ src: "/poi-icons/" + iconKey + ".svg", anchor: [0.5, 1], scale: 0.9 }) });
 }
 
 function createAnalysisStyle() {
@@ -322,6 +332,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const editInteractionsRef = useRef([]);
   const originalDetailGeometryRef = useRef(null);
   const vectorSourcesRef = useRef({
+    Poi: new VectorSource(),
     Point: new VectorSource(),
     Line: new VectorSource(),
     Polygon: new VectorSource()
@@ -346,11 +357,13 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const [selectionFeatures, setSelectionFeatures] = useState([]);
   const [isHeatmapActive, setIsHeatmapActive] = useState(false);
   const [layerVisibility, setLayerVisibility] = useState({
+    Poi: true,
     Point: true,
     Line: true,
     Polygon: true
   });
   const [attributeForm, setAttributeForm] = useState({ name: "", color: DEFAULT_COLOR });
+  const [poiCategories, setPoiCategories] = useState([]);
   const [detailForm, setDetailForm] = useState({ name: "", color: DEFAULT_COLOR });
   const [isDetailEditing, setIsDetailEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -370,6 +383,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const [queryResults, setQueryResults] = useState([]);
   const [queryError, setQueryError] = useState("");
   const [queryReloadKey, setQueryReloadKey] = useState(0);
+  const [poiSearch, setPoiSearch] = useState("");
+  const [poiSearchResults, setPoiSearchResults] = useState([]);
+  const [poiSearchError, setPoiSearchError] = useState("");
 
   useEffect(() => {
     onLogoutRef.current = onLogout;
@@ -378,6 +394,29 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   useEffect(() => {
     userInfoRef.current = userInfo;
   }, [userInfo]);
+
+  useEffect(() => {
+    if (!(userInfo?.permissions ?? []).includes("Poi.Search") || poiSearch.trim().length < 2) { setPoiSearchResults([]); setPoiSearchError(""); return; }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(API_URL + "/poi/search?q=" + encodeURIComponent(poiSearch.trim()) + "&limit=10", { signal: controller.signal, headers: { Authorization: "Bearer " + localStorage.getItem(TOKEN_KEY) } });
+        if (!response.ok) throw new Error("Arama yapılamadı.");
+        setPoiSearchResults(await response.json()); setPoiSearchError("");
+      } catch (error) { if (error.name !== "AbortError") setPoiSearchError(error.message); }
+    }, 350);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [poiSearch, userInfo]);
+
+  function selectPoiSearchResult(item) {
+    const feature = new Feature({ geometry: new PointGeometry(fromLonLat([item.longitude, item.latitude])) });
+    Object.entries({ id:item.id, endpoint:"Pois", type:"Poi", name:item.name, categoryId:item.categoryId, categoryName:item.categoryName, parentCategoryName:item.parentCategoryName, workingHours:item.workingHours }).forEach(([key,value]) => feature.set(key,value));
+    feature.set("iconKey", item.iconKey || "default");
+    feature.setStyle(createPoiIconStyle(item.iconKey));
+    vectorSourcesRef.current.Poi.clear(); vectorSourcesRef.current.Poi.addFeature(feature);
+    mapInstanceRef.current?.getView().animate({ center: feature.getGeometry().getCoordinates(), zoom: 17, duration: 650 });
+    setPoiSearchResults([]); setPoiSearch(item.name); openDetailPopup(feature); loadPoiDetail(feature);
+  }
 
   useEffect(() => {
     layerVisibilityRef.current = layerVisibility;
@@ -403,7 +442,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     wmsLayersRef.current = {
       Polygon: createWmsLayer("Polygon", userInfo?.userId, layerVisibility.Polygon),
       Line: createWmsLayer("Line", userInfo?.userId, layerVisibility.Line),
-      Point: createWmsLayer("Point", userInfo?.userId, layerVisibility.Point)
+      Point: createWmsLayer("Point", userInfo?.userId, layerVisibility.Point),
+      Poi: createWmsLayer("Poi", userInfo?.userId, layerVisibility.Poi)
     };
     heatmapLayerRef.current = createHeatmapWmsLayer(userInfo?.userId);
     heatmapVectorLayerRef.current = new HeatmapLayer({
@@ -415,6 +455,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       zIndex: WMS_Z_INDEX.Heatmap + 1
     });
     vectorLayersRef.current = {
+      Poi: new VectorLayer({ source: vectorSourcesRef.current.Poi, zIndex: WMS_Z_INDEX.Selection + 1, style: createFeatureStyle("#dc2626") }),
       Point: new VectorLayer({
         source: vectorSourcesRef.current.Point,
         zIndex: WMS_Z_INDEX.Selection
@@ -442,11 +483,13 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         wmsLayersRef.current.Polygon,
         wmsLayersRef.current.Line,
         wmsLayersRef.current.Point,
+        wmsLayersRef.current.Poi,
         heatmapLayerRef.current,
         heatmapVectorLayerRef.current,
         vectorLayersRef.current.Polygon,
         vectorLayersRef.current.Line,
         vectorLayersRef.current.Point,
+        vectorLayersRef.current.Poi,
         analysisLayerRef.current
       ],
       view: new View({
@@ -488,6 +531,42 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   }, []);
 
   useEffect(() => {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token || !(userInfo?.permissions ?? []).includes("Poi.View")) return;
+    fetch(API_URL + "/poi-categories/active", { headers: { Authorization: "Bearer " + token } })
+      .then(r => r.ok ? r.json() : []).then(setPoiCategories)
+      .catch(() => setPopupError("POI kategorileri yüklenemedi."));
+  }, [userInfo]);
+
+  useEffect(() => {
+    if (!(userInfo?.permissions ?? []).includes("Poi.View")) {
+      vectorSourcesRef.current.Poi.clear();
+      return;
+    }
+    let cancelled = false;
+    const token = localStorage.getItem(TOKEN_KEY);
+    fetch(API_URL + "/pois", { headers: { Authorization: "Bearer " + token } })
+      .then(response => {
+        if (!response.ok) throw new Error("POI kayıtları alınamadı.");
+        return response.json();
+      })
+      .then(items => {
+        if (cancelled) return;
+        const source = vectorSourcesRef.current.Poi;
+        source.clear();
+        items.forEach(item => {
+          const feature = wktFormatRef.current.readFeature(item.wkt, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+          Object.entries({ id:item.id, endpoint:"Pois", type:"Poi", name:item.name, categoryId:item.categoryId, categoryName:item.categoryName, parentCategoryName:item.parentCategoryName, workingHours:item.workingHours, iconKey:item.iconKey || "default", username:item.username, createdDate:item.createdDate }).forEach(([key, value]) => feature.set(key, value));
+          feature.setStyle(createPoiIconStyle(item.iconKey));
+          feature.set("isBackendFallback", true);
+          source.addFeature(feature);
+        });
+      })
+      .catch(() => setPopupError("POI katmanı yüklenemedi."));
+    return () => { cancelled = true; };
+  }, [userInfo?.userId, userInfo?.permissions, queryReloadKey]);
+
+  useEffect(() => {
     Object.entries(layerVisibility).forEach(([type, isVisible]) => {
       wmsLayersRef.current[type]?.setVisible(isVisible);
       vectorLayersRef.current[type]?.setVisible(isVisible);
@@ -496,6 +575,13 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
 
   useEffect(() => {
     Object.keys(GEOSERVER_LAYERS).forEach((type) => updateWmsCqlFilter(type));
+    const poiSource = wmsLayersRef.current.Poi?.getSource();
+    if (poiSource) {
+      poiSource.updateParams({
+        CQL_FILTER: buildLayerCqlFilter("Poi"),
+        _session: (userInfo?.userId ?? "anonymous") + "-" + Date.now()
+      });
+    }
     updateHeatmapCqlFilter();
   }, [userInfo?.userId]);
 
@@ -599,7 +685,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       }
 
       setPendingFeature({ feature: event.feature, endpoint: setting.endpoint });
-      setAttributeForm({ name: "", color: DEFAULT_COLOR });
+      setAttributeForm({ name: "", color: DEFAULT_COLOR, categoryId: "", workingHours: "" });
       setPopupError("");
       setInventoryMessage("");
       activeToolRef.current = null;
@@ -669,7 +755,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
 
   function createWmsLayer(type, userId, isVisible) {
     const layer = GEOSERVER_LAYERS[type];
-    const cqlFilter = buildUserCqlFilter(userId);
+    const cqlFilter = buildLayerCqlFilter(type, userId);
     const params = {
       LAYERS: layer.name,
       TILED: true,
@@ -677,6 +763,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       FORMAT: "image/png",
       TRANSPARENT: true
     };
+    if (type === "Poi") params.STYLES = GEOSERVER_POI_STYLE;
 
     if (cqlFilter) {
       params.CQL_FILTER = cqlFilter;
@@ -749,7 +836,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       return;
     }
 
-    const cqlFilter = buildUserCqlFilter(userInfoRef.current?.userId);
+    const cqlFilter = buildLayerCqlFilter(type, userInfoRef.current?.userId);
     const params = cqlFilter ? { CQL_FILTER: cqlFilter } : { CQL_FILTER: null };
     source.updateParams(params);
     debugWmsParams("layer", GEOSERVER_LAYERS[type].name, source.getParams());
@@ -775,7 +862,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       return;
     }
 
-    const cqlFilter = buildUserCqlFilter(userInfoRef.current?.userId);
+    const cqlFilter = buildLayerCqlFilter(type, userInfoRef.current?.userId);
     const params = cqlFilter ? { CQL_FILTER: cqlFilter, _refresh: Date.now() } : { CQL_FILTER: null, _refresh: Date.now() };
     source.updateParams(params);
     debugWmsParams("layer-refresh", GEOSERVER_LAYERS[type].name, source.getParams());
@@ -817,6 +904,12 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     feature.set("name", properties.name ?? properties.Name ?? "");
     feature.set("color", color);
     feature.set("modifiedDate", properties.modifiedDate ?? properties.ModifiedDate ?? "");
+    if (type === "Poi") {
+      feature.set("categoryId", properties.categoryid ?? properties.CategoryId);
+      feature.set("workingHours", properties.workinghours ?? properties.WorkingHours ?? "");
+      feature.set("iconKey", properties.iconkey ?? properties.IconKey ?? "default");
+      feature.setStyle(createPoiIconStyle(feature.get("iconKey")));
+    }
     feature.setStyle(createFeatureStyle(color));
 
     return feature;
@@ -866,7 +959,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     try {
       const results = await getFeaturesFromLayers({
         types: visibleTypes,
-        cqlFilter: buildUserCqlFilter(currentUserId),
+        userId: currentUserId,
         bbox: [x - tolerance, y - tolerance, x + tolerance, y + tolerance],
         maxFeatures: 10
       });
@@ -1128,12 +1221,30 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     setSelectedFeature(feature);
     setDetailForm({
       name: feature.get("name") || "",
-      color
+      color,
+      categoryId: feature.get("categoryId") || "",
+      workingHours: feature.get("workingHours") || ""
     });
     setIsDetailEditing(false);
     setIsDetailSaving(false);
     setDetailError("");
     originalDetailGeometryRef.current = null;
+    if (feature.get("type") === "Poi" && !feature.get("categoryName")) loadPoiDetail(feature);
+  }
+
+  async function loadPoiDetail(feature) {
+    const token = localStorage.getItem(TOKEN_KEY);
+    try {
+      const response = await fetch(API_URL + "/pois/" + feature.get("id"), { headers: { Authorization: "Bearer " + token } });
+      if (!response.ok) return;
+      const item = await response.json();
+      Object.entries({ name:item.name, categoryId:item.categoryId, categoryName:item.categoryName, parentCategoryName:item.parentCategoryName, workingHours:item.workingHours, iconKey:item.iconKey, username:item.username, createdDate:item.createdDate }).forEach(([key,value]) => feature.set(key,value));
+      feature.setStyle(createPoiIconStyle(item.iconKey));
+      if (selectedFeature === feature) {
+        setDetailForm(current => ({ ...current, name:item.name, categoryId:item.categoryId, workingHours:item.workingHours }));
+        setSelectedFeature(null); window.setTimeout(() => setSelectedFeature(feature), 0);
+      }
+    } catch { setDetailError("POI detayı alınamadı."); }
   }
 
   function closeDetailPopup() {
@@ -1166,6 +1277,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       setPopupError("Isim alanini doldurun.");
       return;
     }
+    if (pendingFeature.endpoint === "Pois" && !attributeForm.categoryId) {
+      setPopupError("Kategori seçin.");
+      return;
+    }
 
     setIsSaving(true);
     setPopupError("");
@@ -1187,17 +1302,30 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       setInventoryMessage("Polygon \u00e7inde " + saveResult.data.inventoryCount + " adet nokta var");
     }
 
+    const isPoi = pendingFeature.endpoint === "Pois";
     pendingFeature.feature.set("name", attributeForm.name.trim());
     pendingFeature.feature.set("color", attributeForm.color);
     pendingFeature.feature.set("id", saveResult.data?.id ?? saveResult.data?.Id);
+    if (isPoi) {
+      const category = poiCategories.find(item => item.id === Number(attributeForm.categoryId));
+      pendingFeature.feature.set("categoryId", Number(attributeForm.categoryId));
+      pendingFeature.feature.set("categoryName", category?.name || "");
+      pendingFeature.feature.set("parentCategoryName", category?.parentName || "");
+      pendingFeature.feature.set("workingHours", attributeForm.workingHours || "");
+      pendingFeature.feature.set("iconKey", category?.iconKey || "default");
+      pendingFeature.feature.set("username", userInfo?.username || "");
+      pendingFeature.feature.set("createdDate", new Date().toISOString());
+      pendingFeature.feature.set("isBackendFallback", true);
+    }
     pendingFeature.feature.set(
       "type",
       getTypeForEndpoint(pendingFeature.endpoint)
     );
     pendingFeature.feature.set("endpoint", pendingFeature.endpoint);
-    pendingFeature.feature.setStyle(createFeatureStyle(attributeForm.color));
-    getSourceForEndpoint(pendingFeature.endpoint)?.removeFeature(pendingFeature.feature);
+    pendingFeature.feature.setStyle(isPoi ? createPoiIconStyle(pendingFeature.feature.get("iconKey")) : createFeatureStyle(attributeForm.color));
+    if (!isPoi) getSourceForEndpoint(pendingFeature.endpoint)?.removeFeature(pendingFeature.feature);
     refreshWmsLayer(getTypeForEndpoint(pendingFeature.endpoint));
+    if (isPoi) loadPoiDetail(pendingFeature.feature);
     setPendingFeature(null);
     setIsSaving(false);
     setQueryReloadKey((current) => current + 1);
@@ -1221,7 +1349,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
           "Authorization": "Bearer " + token,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ wkt, name, color })
+        body: JSON.stringify(endpoint === "Pois" ? { wkt, name, categoryId: Number(attributeForm.categoryId), workingHours: attributeForm.workingHours, isActive: true } : { wkt, name, color })
       });
 
       if (!response.ok) {
@@ -1345,11 +1473,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
           "Authorization": "Bearer " + token,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          wkt,
-          name: detailForm.name.trim(),
-          color: detailForm.color
-        })
+        body: JSON.stringify(endpoint === "Pois"
+          ? { wkt, name: detailForm.name.trim(), categoryId: Number(detailForm.categoryId), workingHours: detailForm.workingHours, isActive: true }
+          : { wkt, name: detailForm.name.trim(), color: detailForm.color })
       });
 
       if (response.status === 401) {
@@ -1462,6 +1588,11 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       )}
 
       <section className="map-shell">
+        {(userInfo?.permissions ?? []).includes("Poi.Search") && <div className="poi-search-box">
+          <input value={poiSearch} onChange={event => setPoiSearch(event.target.value)} placeholder="POI veya kategori ara" aria-label="POI ara" />
+          {poiSearchError && <div className="poi-search-error">{poiSearchError}</div>}
+          {poiSearchResults.length > 0 && <div className="poi-search-results">{poiSearchResults.map(item => <button type="button" key={item.id} onClick={() => selectPoiSearchResult(item)}><strong>{item.name}</strong><span>{item.parentCategoryName ? item.parentCategoryName + " > " : ""}{item.categoryName}</span><small>{item.workingHours || "Mesai saati belirtilmemiş"}</small></button>)}</div>}
+        </div>}
         {false && (
         <div className="draw-toolbar" aria-label="Cizim araclari">
           <button
@@ -1496,6 +1627,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         </div>
         )}
         <div className="layer-control" aria-label="Layer kontrol">
+          <label>
+            <input type="checkbox" name="Poi" checked={layerVisibility.Poi} onChange={handleLayerVisibilityChange} />
+            POI
+          </label>
           <label>
             <input
               type="checkbox"
@@ -1628,10 +1763,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
                   autoFocus
                 />
               </label>
-              <label>
-                Renk
-                <ColorPickerField value={attributeForm.color} onChange={handleAttributeColorChange} />
-              </label>
+              {pendingFeature.endpoint === "Pois" ? <>
+                <label>Kategori<select name="categoryId" value={attributeForm.categoryId || ""} onChange={handleAttributeChange}><option value="">Kategori seçin</option>{poiCategories.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
+                <label>Mesai saatleri<input name="workingHours" value={attributeForm.workingHours || ""} onChange={handleAttributeChange} placeholder="09:00 - 18:00" /></label>
+              </> : <label>Renk<ColorPickerField value={attributeForm.color} onChange={handleAttributeColorChange} /></label>}
               <div className="attribute-message">{popupError}</div>
               <div className="attribute-actions">
                 <button type="button" className="secondary-button" onClick={cancelPendingFeature} disabled={isSaving}>
@@ -1676,19 +1811,26 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               <span>Tip</span>
               <strong>{selectedFeature.get("type")}</strong>
             </div>
+            {selectedFeature.get("type") === "Poi" && <>
+              <div className="detail-field"><span>Kategori</span><strong>{selectedFeature.get("categoryName") || "-"}</strong></div>
+              <div className="detail-field"><span>Üst kategori</span><strong>{selectedFeature.get("parentCategoryName") || "-"}</strong></div>
+              <div className="detail-field"><span>Mesai saatleri</span><strong>{selectedFeature.get("workingHours") || "-"}</strong></div>
+              <div className="detail-field"><span>Ekleyen</span><strong>{selectedFeature.get("username") || "-"}</strong></div>
+              <div className="detail-field"><span>Oluşturulma</span><strong>{selectedFeature.get("createdDate") ? new Date(selectedFeature.get("createdDate")).toLocaleString("tr-TR") : "-"}</strong></div>
+            </>}
 
             <div className="attribute-message">{detailError}</div>
 
             <div className="detail-actions">
-              <button type="button" className="secondary-button" onClick={startDetailEditing} disabled={isDetailEditing || isDetailSaving}>
+              {(selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Update" || p === "Poi.Manage")) && <button type="button" className="secondary-button" onClick={startDetailEditing} disabled={isDetailEditing || isDetailSaving}>
                 Düzenle
-              </button>
+              </button>}
               <button type="button" className="primary-button" onClick={handleDetailSave} disabled={!isDetailEditing || isDetailSaving}>
                 {isDetailSaving && isDetailEditing ? "Kaydediliyor" : "Kaydet"}
               </button>
-              <button type="button" className="danger-button" onClick={handleDetailDelete} disabled={isDetailSaving}>
+              {(selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Delete" || p === "Poi.Manage")) && <button type="button" className="danger-button" onClick={handleDetailDelete} disabled={isDetailSaving}>
                 Sil
-              </button>
+              </button>}
               <button type="button" className="secondary-button" onClick={closeDetailPopup} disabled={isDetailSaving}>
                 Kapat
               </button>
@@ -1744,4 +1886,3 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
 }
 
 export default Map;
-

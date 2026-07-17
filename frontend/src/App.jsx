@@ -179,7 +179,9 @@ function App() {
     return Boolean(userInfo?.isAdmin) ||
       permissions.includes("User.Manage") ||
       permissions.includes("Role.Manage") ||
-      permissions.includes("Permission.Manage");
+      permissions.includes("Permission.Manage") ||
+      permissions.includes("Poi.Manage") ||
+      permissions.includes("PoiCategory.Manage");
   }
 
   if (token && isUserLoading && !userInfo) {
@@ -194,7 +196,7 @@ function App() {
     return <Login onLogin={handleLogin} sessionMessage={sessionMessage} />;
   }
 
-  return currentPath.startsWith("/admin") && canOpenAdminPanel() ? (
+  return currentPath.startsWith("/admin") && (canOpenAdminPanel() || currentPath === "/admin/pois") ? (
     <AdminPanel
       currentPath={currentPath}
       token={token}

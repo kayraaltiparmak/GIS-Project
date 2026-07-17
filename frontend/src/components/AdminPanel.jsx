@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import GeographicPermissionPanel from "./GeographicPermissionPanel";
+import PoiAdminPanel from "./PoiAdminPanel";
 
 const API_URL = "http://localhost:5291/api/Admin";
 
@@ -10,7 +11,8 @@ const adminSections = [
   { path: "/admin/permissions", label: "Yetkiler" },
   { path: "/admin/role-permissions", label: "Role Yetki Ata" },
   { path: "/admin/user-permissions", label: "Kullanıcı Yetkileri" },
-  { path: "/admin/geo-permissions", label: "Coğrafi Yetki" }
+  { path: "/admin/geo-permissions", label: "Coğrafi Yetki" },
+  { path: "/admin/pois", label: "POI Yönetimi" }
 ];
 
 const emptyUserForm = { id: null, username: "", password: "", roleId: "", isActive: true };
@@ -18,6 +20,12 @@ const emptyRoleForm = { id: null, name: "", description: "", isActive: true };
 const emptyPermissionForm = { id: null, name: "", code: "", description: "", isActive: true };
 
 function AdminPanel({ currentPath, token, userInfo, onBackToMap, onNavigate }) {
+  const permissionSet = useMemo(() => new Set(userInfo?.permissions ?? []), [userInfo]);
+  const canAccessPois = permissionSet.has("Poi.Manage") || permissionSet.has("PoiCategory.Manage");
+  const visibleSections = useMemo(
+    () => adminSections.filter((section) => section.path !== "/admin/pois" || canAccessPois),
+    [canAccessPois]
+  );
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [permissions, setPermissions] = useState([]);
@@ -389,6 +397,9 @@ function AdminPanel({ currentPath, token, userInfo, onBackToMap, onNavigate }) {
     if (activeSection.path === "/admin/permissions") return renderPermissions();
     if (activeSection.path === "/admin/role-permissions") return renderRolePermissions();
     if (activeSection.path === "/admin/user-permissions") return renderUserPermissions();
+    if (activeSection.path === "/admin/pois") return canAccessPois
+      ? <PoiAdminPanel token={token} userInfo={userInfo} />
+      : <div className="admin-forbidden"><strong>403</strong><h2>Yetkiniz yok</h2><p>POI Yönetimi için Poi.Manage veya PoiCategory.Manage yetkisi gerekir.</p></div>;
     if (activeSection.path === "/admin/geo-permissions") {
       return <GeographicPermissionPanel token={token} userInfo={userInfo} />;
     }
@@ -411,7 +422,7 @@ function AdminPanel({ currentPath, token, userInfo, onBackToMap, onNavigate }) {
         </div>
 
         <nav className="admin-navbar-actions" aria-label="Admin menü">
-          {adminSections.map((section) => (
+          {visibleSections.map((section) => (
             <button
               type="button"
               key={section.path}

@@ -28,6 +28,8 @@ public class AppDbContext : DbContext
     public DbSet<TblUserGeographicPermission> TblUserGeographicPermissions { get; set; }
 
     public DbSet<TblRoleGeographicPermission> TblRoleGeographicPermissions { get; set; }
+    public DbSet<TblPoiCategory> TblPoiCategories { get; set; }
+    public DbSet<TblPoi> TblPois { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -170,5 +172,16 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(x => x.ModifiedUserId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<TblPoiCategory>().HasOne(x => x.Parent).WithMany(x => x.Children).HasForeignKey(x => x.ParentId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblPoiCategory>().HasIndex(x => new { x.ParentId, x.Name });
+        modelBuilder.Entity<TblPoiCategory>().HasOne(x => x.CreatedUser).WithMany().HasForeignKey(x => x.CreatedUserId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblPoiCategory>().HasOne(x => x.ModifiedUser).WithMany().HasForeignKey(x => x.ModifiedUserId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblPoi>().Property(x => x.Geometry).HasColumnType("geometry(Point,4326)");
+        modelBuilder.Entity<TblPoi>().HasOne(x => x.Category).WithMany().HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblPoi>().HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblPoi>().HasOne(x => x.ModifiedUser).WithMany().HasForeignKey(x => x.ModifiedUserId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblPoi>().HasIndex(x => x.CategoryId);
+        modelBuilder.Entity<TblPoi>().HasIndex(x => x.UserId);
     }
 }
