@@ -27,6 +27,10 @@ export const GEOSERVER_HEATMAP_STYLE =
   import.meta.env.VITE_GEOSERVER_HEATMAP_STYLE || "point_heatmap";
 export const GEOSERVER_POI_STYLE =
   import.meta.env.VITE_GEOSERVER_POI_STYLE || "poi_category_style";
+export const GEOSERVER_LOCATION_ANALYSIS_LAYER =
+  import.meta.env.VITE_GEOSERVER_LOCATION_ANALYSIS_LAYER || GEOSERVER_WORKSPACE + ":LocationAnalysisResults";
+export const GEOSERVER_LOCATION_ANALYSIS_STYLE =
+  import.meta.env.VITE_GEOSERVER_LOCATION_ANALYSIS_STYLE || "location-analysis-heatmap";
 
 export const GEOSERVER_DEBUG =
   import.meta.env.DEV || import.meta.env.VITE_GEOSERVER_DEBUG === "true";

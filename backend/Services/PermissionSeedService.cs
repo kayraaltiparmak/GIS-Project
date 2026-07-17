@@ -16,6 +16,7 @@ public static class PermissionSeedService
         new("Poi.Manage", "POI yönetimi", "Tüm POI kayıtlarını yönetme yetkisi"),
         new("PoiCategory.Manage", "POI kategori yönetimi", "POI kategorilerini yönetme yetkisi"),
         new("Poi.Search", "POI arama", "POI kayıtlarında arama yetkisi")
+        ,new("LocationAnalysis.Use", "Konum Analizi", "Konum analizi özelliğini kullanma yetkisi")
     ];
 
     public static async Task EnsureRequiredPermissionsAsync(IServiceProvider services)
@@ -32,8 +33,8 @@ public static class PermissionSeedService
         }
         await context.SaveChangesAsync();
         await EnsureRoleAsync(context, "Admin", null, now);
-        await EnsureRoleAsync(context, "Operator", ["Poi.View", "Poi.Create", "Poi.Update", "Poi.Search"], now);
-        await EnsureRoleAsync(context, "User", ["Poi.View", "Poi.Search"], now);
+        await EnsureRoleAsync(context, "Operator", ["Poi.View", "Poi.Create", "Poi.Update", "Poi.Search", "LocationAnalysis.Use"], now);
+        await EnsureRoleAsync(context, "User", ["Poi.View", "Poi.Search", "LocationAnalysis.Use"], now);
     }
 
     private static async Task EnsureRoleAsync(AppDbContext context, string name, string[]? codes, DateTime now)

@@ -38,3 +38,14 @@ CQL_FILTER=IsDeleted=false AND IsActive=true
 ```
 
 GeoServer alanları küçük harf gösteriyorsa eşdeğeri `isdeleted=false AND isactive=true` biçimindedir. Etiketler yalnızca `MaxScaleDenominator=70000` altında, OpenLayers'ta yaklaşık zoom 14 ve daha yakın seviyelerde gösterilir.
+
+## Konum Analizi katmanı
+
+1. PostgreSQL store içinde `LocationAnalysisResults` tablosunu point feature type olarak publish edin. Katman adını `location_analysis_result` yapın ve native/declared SRID değerini EPSG:4326 seçin.
+2. `location-analysis-heatmap.sld` dosyasını `location-analysis-heatmap` adıyla yeni style olarak yükleyin. GeoServer'ın `HeatWeight` kolonunu gördüğünü doğrulayın ve style'ı katmana bağlayın.
+3. Layer Preview ile WMS görüntüsünü kontrol edin. Örnek filtre: `analysis_id='00000000-0000-0000-0000-000000000000' AND user_id=1 AND is_active=true`.
+4. PostgreSQL isimleri küçük harfe dönüştürülmüşse frontend ortamında layer adını buna göre ayarlayın veya GeoServer feature type alias'ını yukarıdaki adla verin.
+
+Frontend her analizde `analysis_id`, JWT'den alınmış mevcut `user_id` ve `is_active=true` koşullarını CQL_FILTER olarak yollar. Normal POI katmanı bu kullanıcı filtresini kullanmaz.
+
+`ProvinceBoundaries` tablosu il seçim kaynağıdır. İl geometrileri frontend içine gömülmez; kurumunuzun güncel ve lisanslı Türkiye il sınırı verisini EPSG:4326 olarak bu tabloya yükleyin.

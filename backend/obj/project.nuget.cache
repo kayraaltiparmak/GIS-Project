@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "gr25KzGWJUc=",
+  "dgSpecHash": "lmCn+CVNSYQ=",
   "success": true,
   "projectFilePath": "C:\\Users\\Kayra\\Desktop\\MAP_PROJECT\\backend\\backend.csproj",
   "expectedPackageFiles": [
@@ -39,7 +39,10 @@
     "C:\\Users\\Kayra\\.nuget\\packages\\microsoft.openapi\\1.6.14\\microsoft.openapi.1.6.14.nupkg.sha512",
     "C:\\Users\\Kayra\\.nuget\\packages\\mono.texttemplating\\2.2.1\\mono.texttemplating.2.2.1.nupkg.sha512",
     "C:\\Users\\Kayra\\.nuget\\packages\\nettopologysuite\\2.5.0\\nettopologysuite.2.5.0.nupkg.sha512",
+    "C:\\Users\\Kayra\\.nuget\\packages\\nettopologysuite.features\\2.0.0\\nettopologysuite.features.2.0.0.nupkg.sha512",
+    "C:\\Users\\Kayra\\.nuget\\packages\\nettopologysuite.io.geojson\\4.0.0\\nettopologysuite.io.geojson.4.0.0.nupkg.sha512",
     "C:\\Users\\Kayra\\.nuget\\packages\\nettopologysuite.io.postgis\\2.1.0\\nettopologysuite.io.postgis.2.1.0.nupkg.sha512",
+    "C:\\Users\\Kayra\\.nuget\\packages\\newtonsoft.json\\13.0.1\\newtonsoft.json.13.0.1.nupkg.sha512",
     "C:\\Users\\Kayra\\.nuget\\packages\\npgsql\\8.0.0\\npgsql.8.0.0.nupkg.sha512",
     "C:\\Users\\Kayra\\.nuget\\packages\\npgsql.entityframeworkcore.postgresql\\8.0.0\\npgsql.entityframeworkcore.postgresql.8.0.0.nupkg.sha512",
     "C:\\Users\\Kayra\\.nuget\\packages\\npgsql.entityframeworkcore.postgresql.nettopologysuite\\8.0.0\\npgsql.entityframeworkcore.postgresql.nettopologysuite.8.0.0.nupkg.sha512",

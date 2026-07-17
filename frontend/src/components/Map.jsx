@@ -15,6 +15,7 @@ import Draw from "ol/interaction/Draw";
 import Modify from "ol/interaction/Modify";
 import Translate from "ol/interaction/Translate";
 import WKT from "ol/format/WKT";
+import GeoJSON from "ol/format/GeoJSON";
 import { fromLonLat } from "ol/proj";
 import Style from "ol/style/Style";
 import Stroke from "ol/style/Stroke";
@@ -28,6 +29,8 @@ import {
   GEOSERVER_HEATMAP_STYLE,
   GEOSERVER_LAYERS,
   GEOSERVER_POI_STYLE,
+  GEOSERVER_LOCATION_ANALYSIS_LAYER,
+  GEOSERVER_LOCATION_ANALYSIS_STYLE,
   GEOSERVER_WMS_URL
 } from "../config/geoserver";
 import { buildLayerCqlFilter, buildUserCqlFilter, getFeaturesFromLayers } from "../services/geoserverWfs";
@@ -73,6 +76,7 @@ const drawSettings = {
   Line: { drawType: "LineString", endpoint: "TblLine" },
   Polygon: { drawType: "Polygon", endpoint: "TblPolygon" },
   InventoryAnalysis: { drawType: "Polygon", endpoint: "InventoryAnalysis" }
+  ,LocationAnalysis: { drawType: "Polygon", endpoint: "LocationAnalysis" }
 };
 
 const WMS_Z_INDEX = {
@@ -344,6 +348,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const heatmapSourceRef = useRef(new VectorSource());
   const heatmapVectorLayerRef = useRef(null);
   const analysisLayerRef = useRef(null);
+  const locationHeatmapLayerRef = useRef(null);
+  const locationHeatmapSourceRef = useRef(new VectorSource());
+  const locationHeatmapVectorLayerRef = useRef(null);
+  const geoJsonFormatRef = useRef(new GeoJSON());
   const wktFormatRef = useRef(new WKT());
   const onLogoutRef = useRef(onLogout);
   const userInfoRef = useRef(userInfo);
@@ -386,6 +394,15 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const [poiSearch, setPoiSearch] = useState("");
   const [poiSearchResults, setPoiSearchResults] = useState([]);
   const [poiSearchError, setPoiSearchError] = useState("");
+  const [locationPanelOpen, setLocationPanelOpen] = useState(false);
+  const [targetGeometry, setTargetGeometry] = useState(null);
+  const [criteria, setCriteria] = useState([{ categoryId: "", weight: "" }, { categoryId: "", weight: "" }]);
+  const [locationResult, setLocationResult] = useState(null);
+  const [locationError, setLocationError] = useState("");
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [targetMethod, setTargetMethod] = useState("draw");
+  const [provinces, setProvinces] = useState([]);
+  const [selectedProvince, setSelectedProvince] = useState("");
 
   useEffect(() => {
     onLogoutRef.current = onLogout;
@@ -473,6 +490,20 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       source: analysisSourceRef.current,
       zIndex: WMS_Z_INDEX.Analysis
     });
+    locationHeatmapLayerRef.current = new TileLayer({
+      source: new TileWMS({ url: GEOSERVER_WMS_URL, params: { LAYERS: GEOSERVER_LOCATION_ANALYSIS_LAYER, STYLES: GEOSERVER_LOCATION_ANALYSIS_STYLE, TILED: true }, serverType: "geoserver", crossOrigin: "anonymous" }),
+      visible: false, zIndex: WMS_Z_INDEX.Heatmap
+    });
+    locationHeatmapVectorLayerRef.current = new HeatmapLayer({
+      source: locationHeatmapSourceRef.current,
+      blur: 28,
+      radius: 42,
+      weight: feature => feature.get("heatWeight") || 0,
+      gradient: ["#2563eb", "#06b6d4", "#22c55e", "#fde047", "#ef4444"],
+      visible: false,
+      opacity: 0.9,
+      zIndex: WMS_Z_INDEX.Heatmap + 2
+    });
 
     mapInstanceRef.current = new OLMap({
       target: mapElementRef.current,
@@ -484,6 +515,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         wmsLayersRef.current.Line,
         wmsLayersRef.current.Point,
         wmsLayersRef.current.Poi,
+        locationHeatmapLayerRef.current,
+        locationHeatmapVectorLayerRef.current,
         heatmapLayerRef.current,
         heatmapVectorLayerRef.current,
         vectorLayersRef.current.Polygon,
@@ -565,6 +598,12 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       .catch(() => setPopupError("POI katmanı yüklenemedi."));
     return () => { cancelled = true; };
   }, [userInfo?.userId, userInfo?.permissions, queryReloadKey]);
+
+  useEffect(() => {
+    if (!(userInfo?.permissions ?? []).includes("LocationAnalysis.Use")) return;
+    fetch(API_URL + "/provinces", { headers: { Authorization: "Bearer " + localStorage.getItem(TOKEN_KEY) } })
+      .then(r => r.ok ? r.json() : []).then(setProvinces).catch(() => setProvinces([]));
+  }, [userInfo]);
 
   useEffect(() => {
     Object.entries(layerVisibility).forEach(([type, isVisible]) => {
@@ -667,7 +706,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
 
     const setting = drawSettings[activeTool];
     const draw = new Draw({
-      source: activeTool === "InventoryAnalysis" ? analysisSourceRef.current : getSourceForType(activeTool),
+      source: activeTool === "InventoryAnalysis" || activeTool === "LocationAnalysis" ? analysisSourceRef.current : getSourceForType(activeTool),
       type: setting.drawType
     });
 
@@ -682,6 +721,11 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         drawInteractionRef.current = null;
         setActiveTool(null);
         return;
+      }
+      if (activeTool === "LocationAnalysis") {
+        analysisSourceRef.current.clear(); event.feature.setStyle(createAnalysisStyle()); analysisSourceRef.current.addFeature(event.feature);
+        setTargetGeometry(geoJsonFormatRef.current.writeGeometryObject(event.feature.getGeometry(), { featureProjection: "EPSG:3857", dataProjection: "EPSG:4326" }));
+        setLocationError(""); activeToolRef.current = null; map.removeInteraction(draw); drawInteractionRef.current = null; setActiveTool(null); return;
       }
 
       setPendingFeature({ feature: event.feature, endpoint: setting.endpoint });
@@ -1147,6 +1191,48 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     setActiveTool(tool);
   }
 
+  function updateCriterion(index, field, value) { setCriteria(items => items.map((item, i) => i === index ? { ...item, [field]: value } : item)); }
+  function clearLocationAnalysis(close = false) {
+    analysisSourceRef.current.clear(); locationHeatmapLayerRef.current?.setVisible(false); locationHeatmapSourceRef.current.clear(); locationHeatmapVectorLayerRef.current?.setVisible(false); setTargetGeometry(null);
+    setCriteria([{ categoryId: "", weight: "" }, { categoryId: "", weight: "" }]); setLocationResult(null); setLocationError(""); setSelectedProvince("");
+    if (drawInteractionRef.current) mapInstanceRef.current?.removeInteraction(drawInteractionRef.current); drawInteractionRef.current = null; setActiveTool(null);
+    if (close) setLocationPanelOpen(false);
+  }
+  async function selectProvince(id) {
+    setSelectedProvince(id); if (!id) { setTargetGeometry(null); analysisSourceRef.current.clear(); return; }
+    try {
+      const response = await fetch(API_URL + "/provinces/" + id, { headers: { Authorization: "Bearer " + localStorage.getItem(TOKEN_KEY) } });
+      if (!response.ok) throw new Error("İl geometrisi alınamadı."); const data = await response.json();
+      const geometry = typeof data.geometry === "string" ? JSON.parse(data.geometry) : data.geometry;
+      const feature = geoJsonFormatRef.current.readFeature({ type:"Feature", geometry, properties:{} }, { dataProjection:"EPSG:4326", featureProjection:"EPSG:3857" });
+      analysisSourceRef.current.clear(); feature.setStyle(createAnalysisStyle()); analysisSourceRef.current.addFeature(feature); setTargetGeometry(geometry); setLocationError("");
+      mapInstanceRef.current?.getView().fit(feature.getGeometry().getExtent(), { padding:[70,420,70,70], duration:500 });
+    } catch (error) { setLocationError(error.message); }
+  }
+  async function runLocationAnalysis() {
+    const total = criteria.reduce((sum, x) => sum + Number(x.weight || 0), 0);
+    const ids = criteria.map(x => Number(x.categoryId));
+    if (!targetGeometry) return setLocationError("Hedef bölge seçilmedi.");
+    if (criteria.length < 2 || criteria.length > 5) return setLocationError("En az 2, en fazla 5 kriter seçilmelidir.");
+    if (ids.some(x => !x) || new Set(ids).size !== ids.length) return setLocationError("Her kategori seçilmeli ve aynı kategori tekrarlanmamalıdır.");
+    if (total !== 100) return setLocationError("Kriter toplamı 100 olmalıdır.");
+    setLocationLoading(true); setLocationError("");
+    try {
+      const response = await fetch(API_URL + "/location-analysis", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + localStorage.getItem(TOKEN_KEY) }, body: JSON.stringify({ targetGeometry, criteria: criteria.map(x => ({ categoryId: Number(x.categoryId), weight: Number(x.weight) })) }) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.message || "Analiz sırasında hata oluştu."); setLocationResult(data);
+      locationHeatmapSourceRef.current.clear();
+      (data.points || []).forEach(point => {
+        const feature = new Feature({ geometry: new PointGeometry(fromLonLat([point.longitude, point.latitude])) });
+        feature.set("heatWeight", Math.max(0.15, Number(point.heatWeight) || 0)); locationHeatmapSourceRef.current.addFeature(feature);
+      });
+      locationHeatmapVectorLayerRef.current?.setVisible((data.points || []).length > 0);
+      const source = locationHeatmapLayerRef.current.getSource();
+      const safeAnalysisId = String(data.analysisId).replace(/[^a-fA-F0-9-]/g, ""); const safeUserId = Number(userInfo?.userId);
+      source.updateParams({ CQL_FILTER: "AnalysisId='" + safeAnalysisId + "' AND UserId=" + safeUserId + " AND IsActive=true", _refresh: Date.now() });
+      locationHeatmapLayerRef.current.setVisible(true); const extent = analysisSourceRef.current.getExtent(); mapInstanceRef.current?.getView().fit(extent, { padding: [80, 420, 80, 80], duration: 500, maxZoom: 16 });
+    } catch (error) { setLocationError(error.message); } finally { setLocationLoading(false); }
+  }
+
   function toggleHeatmapAnalysis() {
     setSelectionFeatures([]);
     closeDetailPopup();
@@ -1574,6 +1660,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         onLogout={onLogout}
         onStartDrawing={startDrawing}
         onToggleHeatmap={toggleHeatmapAnalysis}
+        onLocationAnalysis={() => setLocationPanelOpen(true)}
       />
       {false && (
       <header className="topbar">
@@ -1588,6 +1675,18 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       )}
 
       <section className="map-shell">
+        {locationPanelOpen && <aside className="location-analysis-panel">
+          <div className="location-panel-header"><h2>Konum Analizi</h2><button type="button" onClick={() => clearLocationAnalysis(true)}>×</button></div>
+          <section><h3>1. Hedef Bölge</h3><div className="target-method"><label><input type="radio" checked={targetMethod === "draw"} onChange={() => setTargetMethod("draw")}/> Polygon Çiz</label><label><input type="radio" checked={targetMethod === "province"} onChange={() => setTargetMethod("province")}/> İl Seç</label></div>{targetMethod === "draw" ? <button type="button" className="secondary-button" onClick={() => startDrawing("LocationAnalysis")}>{targetGeometry ? "Polygonu Yeniden Çiz" : "Haritada Polygon Çiz"}</button> : <select value={selectedProvince} onChange={e => selectProvince(e.target.value)}><option value="">İl seçin</option>{provinces.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select>}<small>{targetGeometry ? "Hedef alan hazır" : targetMethod === "province" && provinces.length === 0 ? "İl sınırı verisi henüz yüklenmemiş" : "Bir hedef bölge seçmeniz gerekir"}</small></section>
+          <section><div className="criteria-title"><h3>2. Kriterler</h3><button type="button" disabled={criteria.length >= 5} onClick={() => setCriteria(x => [...x, { categoryId:"", weight:"" }])}>Kriter Ekle</button></div>
+            {criteria.map((criterion, index) => <div className="criterion-row" key={index}><select value={criterion.categoryId} onChange={e => updateCriterion(index, "categoryId", e.target.value)}><option value="">POI kategorisi</option>{poiCategories.map(c => <option key={c.id} value={c.id} disabled={criteria.some((x,i) => i !== index && String(x.categoryId) === String(c.id))}>{c.displayName}</option>)}</select><input type="number" min="1" max="100" value={criterion.weight} onChange={e => updateCriterion(index, "weight", e.target.value)} placeholder="Puan"/><button type="button" disabled={criteria.length <= 2} onClick={() => setCriteria(x => x.filter((_,i) => i !== index))}>Sil</button></div>)}
+          </section>
+          <div className={criteria.reduce((s,x) => s + Number(x.weight || 0),0) === 100 ? "location-total valid" : "location-total"}>Toplam Puan: {criteria.reduce((s,x) => s + Number(x.weight || 0),0)} / 100</div>
+          {locationError && <div className="location-error">{locationError}</div>}
+          <button type="button" className="primary-button" disabled={locationLoading || !targetGeometry || criteria.reduce((s,x) => s + Number(x.weight || 0),0) !== 100} onClick={runLocationAnalysis}>{locationLoading ? "Analiz yapılıyor..." : "Analizi Başlat"}</button>
+          <button type="button" className="secondary-button" onClick={() => clearLocationAnalysis(false)}>Temizle</button>
+          {locationResult && <div className="location-summary"><strong>{locationResult.message}</strong><span>Toplam {locationResult.matchedPoiCount} POI</span>{locationResult.criteriaSummary?.map(x => <span key={x.categoryId}>{x.categoryName} — {x.matchedPoiCount} POI — {x.weight} puan</span>)}</div>}
+        </aside>}
         {(userInfo?.permissions ?? []).includes("Poi.Search") && <div className="poi-search-box">
           <input value={poiSearch} onChange={event => setPoiSearch(event.target.value)} placeholder="POI veya kategori ara" aria-label="POI ara" />
           {poiSearchError && <div className="poi-search-error">{poiSearchError}</div>}

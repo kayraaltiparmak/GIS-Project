@@ -15,6 +15,7 @@ builder.Services.AddScoped<ITblPolygonService, TblPolygonService>();
 builder.Services.AddScoped<IInventoryAnalysisService, InventoryAnalysisService>();
 builder.Services.AddScoped<IUserPermissionService, UserPermissionService>();
 builder.Services.AddScoped<IGeographicPermissionService, GeographicPermissionService>();
+builder.Services.AddScoped<ILocationAnalysisService, LocationAnalysisService>();
 
 builder.Services.AddCors(options =>
 {

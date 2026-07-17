@@ -1709,3 +1709,7 @@ button {
     width: auto;
   }
 }
+
+.location-analysis-panel { position:absolute; z-index:7; top:18px; right:18px; width:min(390px,calc(100% - 36px)); max-height:calc(100% - 36px); overflow:auto; display:grid; gap:13px; padding:18px; background:#fffffff7; border:1px solid #cbd5e1; border-radius:12px; box-shadow:0 20px 48px #0f172a40; }
+.location-panel-header,.criteria-title { display:flex; align-items:center; justify-content:space-between; gap:10px; }.location-panel-header button,.criteria-title button,.criterion-row button { border:0; border-radius:6px; padding:7px 9px; cursor:pointer; }.location-analysis-panel section { display:grid; gap:8px; }.location-analysis-panel h2 { font-size:20px; }.location-analysis-panel h3 { font-size:14px; color:#334155; }.criterion-row { display:grid; grid-template-columns:1fr 72px auto; gap:7px; }.criterion-row select,.criterion-row input { min-width:0; padding:9px; border:1px solid #cbd5e1; border-radius:7px; }.location-total { padding:10px; border-radius:7px; background:#fff7ed; color:#9a3412; font-weight:800; }.location-total.valid { background:#ecfdf5; color:#047857; }.location-error { color:#b91c1c; font-size:13px; font-weight:700; }.location-summary { display:grid; gap:5px; padding:10px; border-radius:8px; background:#f0fdfa; font-size:13px; }
+.target-method { display:flex; gap:16px; font-size:13px; }.target-method label { display:flex; align-items:center; gap:5px; }.location-analysis-panel section>select { padding:9px; border:1px solid #cbd5e1; border-radius:7px; }

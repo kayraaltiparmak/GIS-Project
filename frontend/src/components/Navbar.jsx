@@ -48,7 +48,8 @@ function Navbar({
   onAdminOpen,
   onLogout,
   onStartDrawing,
-  onToggleHeatmap
+  onToggleHeatmap,
+  onLocationAnalysis
 }) {
   const permissions = new Set(userInfo?.permissions ?? []);
   const canOpenAdminPanel =
@@ -97,6 +98,9 @@ function Navbar({
             <GeometryIcon type="Polygon" />
             Polygon
           </button>
+        )}
+        {permissions.has("LocationAnalysis.Use") && (
+          <button type="button" onClick={onLocationAnalysis}>Konum Analizi</button>
         )}
         {permissions.has("Inventory.Analyze") && (
           <button
