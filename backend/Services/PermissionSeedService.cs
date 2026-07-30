@@ -20,6 +20,7 @@ public static class PermissionSeedService
         new("TransportRoute.View", "Güzergah görüntüleme", "Ulaşım güzergahlarını görüntüleme yetkisi"),
         new("TransportRoute.Create", "Güzergah ekleme", "Ulaşım güzergahı ekleme yetkisi"),
         new("TransportRoute.Update", "Güzergah güncelleme", "Ulaşım güzergahı güncelleme yetkisi"),
+        new("TransportRoute.Calculate", "Güzergah hesaplama", "Ulaşım güzergahını OSRM ile hesaplama yetkisi"),
         new("TransportRoute.Delete", "Güzergah silme", "Ulaşım güzergahını pasife alma yetkisi"),
         new("TransportStop.View", "Durak görüntüleme", "Ulaşım duraklarını görüntüleme yetkisi"),
         new("TransportStop.Create", "Durak ekleme", "Ulaşım durağı ekleme yetkisi"),
@@ -43,7 +44,7 @@ public static class PermissionSeedService
         await EnsureRoleAsync(context, "Admin", null, now);
         await EnsureRoleAsync(context, "Operator", ["Poi.View", "Poi.Create", "Poi.Update", "Poi.Search", "LocationAnalysis.Use"], now);
         await EnsureRoleAsync(context, "User", ["Poi.View", "Poi.Search", "LocationAnalysis.Use"], now);
-        await EnsureRoleAsync(context, "Transport Operator", ["TransportRoute.View", "TransportRoute.Create", "TransportRoute.Update", "TransportRoute.Delete", "TransportStop.View", "TransportStop.Create", "TransportStop.Update", "TransportStop.Delete"], now);
+        await EnsureRoleAsync(context, "Transport Operator", ["TransportRoute.View", "TransportRoute.Create", "TransportRoute.Update", "TransportRoute.Delete", "TransportRoute.Calculate", "TransportStop.View", "TransportStop.Create", "TransportStop.Update", "TransportStop.Delete"], now);
         await EnsureRoleAsync(context, "Transport User", ["TransportRoute.View", "TransportStop.View"], now);
     }
 

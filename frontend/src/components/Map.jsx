@@ -92,6 +92,29 @@ const WMS_Z_INDEX = {
   Analysis: 80
 };
 
+function createTransportRouteStyle(feature, resolution) {
+  const color = /^#[0-9a-f]{6}$/i.test(feature.get("color") || "") ? feature.get("color") : "#2563eb";
+  const selected = Boolean(feature.get("selected"));
+  const styles = [new Style({ stroke: new Stroke({ color, width: selected ? 7 : 4 }) })];
+  const coordinates = feature.getGeometry()?.getCoordinates?.() ?? [];
+  const step = Math.max(8, Math.ceil((resolution || 1) * 1.5), Math.ceil(coordinates.length / 35));
+  for (let index = step; index < coordinates.length; index += step) {
+    const start = coordinates[index - 1], end = coordinates[index];
+    if (!start || !end) continue;
+    const rotation = Math.atan2(end[1] - start[1], end[0] - start[0]);
+    styles.push(new Style({
+      geometry: new PointGeometry([(start[0] + end[0]) / 2, (start[1] + end[1]) / 2]),
+      image: new Icon({
+        src: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M3 3l12 6-12 6 3-6z" fill="${color}" stroke="white" stroke-width="1.2"/></svg>`),
+        rotation: -rotation,
+        rotateWithView: true,
+        scale: selected ? 1 : 0.8
+      })
+    }));
+  }
+  return styles;
+}
+
 function formatTime(totalSeconds) {
   const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
   const seconds = String(totalSeconds % 60).padStart(2, "0");
@@ -339,8 +362,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const canSeePointLayer = isMapAdmin || ["Point.Create", "Point.Update", "Point.Delete"].some(x => mapPermissions.has(x));
   const canSeeLineLayer = isMapAdmin || ["Line.Create", "Line.Update", "Line.Delete"].some(x => mapPermissions.has(x));
   const canSeePolygonLayer = isMapAdmin || ["Polygon.Create", "Polygon.Update", "Polygon.Delete"].some(x => mapPermissions.has(x));
+  const canSeeTransportRoutes = isMapAdmin || mapPermissions.has("TransportRoute.View");
   const canUseGeometryQuery = isMapAdmin || canSeePointLayer || canSeeLineLayer || canSeePolygonLayer || mapPermissions.has("Inventory.Analyze");
-  const visibleLayerToggleCount = [canSeePoiLayer, canSeePointLayer, canSeeLineLayer, canSeePolygonLayer].filter(Boolean).length;
+  const visibleLayerToggleCount = [canSeePoiLayer, canSeePointLayer, canSeeLineLayer, canSeePolygonLayer, canSeeTransportRoutes].filter(Boolean).length;
   const mapElementRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const drawInteractionRef = useRef(null);
@@ -354,6 +378,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     ,TransportStop: new VectorSource()
   });
   const analysisSourceRef = useRef(new VectorSource());
+  const transportRouteSourceRef = useRef(new VectorSource());
+  const transportRouteLayerRef = useRef(null);
   const vectorLayersRef = useRef({});
   const wmsLayersRef = useRef({});
   const heatmapLayerRef = useRef(null);
@@ -382,6 +408,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     Line: true,
     Polygon: true
     ,TransportStop: true
+    ,TransportRoute: true
   });
   const [attributeForm, setAttributeForm] = useState({ name: "", color: DEFAULT_COLOR });
   const [poiCategories, setPoiCategories] = useState([]);
@@ -419,6 +446,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const [transportPanelOpen, setTransportPanelOpen] = useState(false);
   const [selectedTransportRoute, setSelectedTransportRoute] = useState(null);
   const [transportRoutes, setTransportRoutes] = useState([]);
+  const [selectedTransportRouteId, setSelectedTransportRouteId] = useState(null);
 
   useEffect(() => {
     onLogoutRef.current = onLogout;
@@ -503,6 +531,11 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       }),
       TransportStop: new VectorLayer({ source: vectorSourcesRef.current.TransportStop, zIndex: WMS_Z_INDEX.Selection + 3 })
     };
+    transportRouteLayerRef.current = new VectorLayer({
+      source: transportRouteSourceRef.current,
+      zIndex: WMS_Z_INDEX.Selection + 2,
+      style: createTransportRouteStyle
+    });
     analysisLayerRef.current = new VectorLayer({
       source: analysisSourceRef.current,
       zIndex: WMS_Z_INDEX.Analysis
@@ -540,6 +573,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         vectorLayersRef.current.Line,
         vectorLayersRef.current.Point,
         vectorLayersRef.current.Poi,
+        transportRouteLayerRef.current,
         vectorLayersRef.current.TransportStop,
         analysisLayerRef.current
       ],
@@ -578,6 +612,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       }
       mapInstanceRef.current?.setTarget(undefined);
       mapInstanceRef.current = null;
+      transportRouteSourceRef.current.clear();
+      transportRouteLayerRef.current = null;
     };
   }, []);
 
@@ -618,15 +654,46 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   }, [userInfo?.userId, userInfo?.permissions, queryReloadKey]);
 
   useEffect(() => {
+    const source = transportRouteSourceRef.current;
+    source.clear();
+    if (!canSeeTransportRoutes) { setTransportRoutes([]); return; }
+    let cancelled = false;
+    getRoutes().then(routes => {
+      if (cancelled) return;
+      setTransportRoutes(routes);
+      routes.filter(route => route.geometry).forEach(route => {
+        const feature = geoJsonFormatRef.current.readFeature({
+          type: "Feature", geometry: route.geometry, properties: {}
+        }, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+        feature.setProperties({ routeId: route.id, name: route.name, color: route.color, selected: route.id === selectedTransportRouteId });
+        source.addFeature(feature);
+      });
+    }).catch(() => setPopupError("Ulaşım güzergahları yüklenemedi."));
+    return () => { cancelled = true; };
+  }, [canSeeTransportRoutes, queryReloadKey, selectedTransportRouteId]);
+
+  useEffect(() => {
     const canView = (userInfo?.permissions ?? []).includes("TransportStop.View");
     const source = vectorSourcesRef.current.TransportStop; source.clear();
     if (!canView) return;
     let cancelled = false; const token = localStorage.getItem(TOKEN_KEY);
-    Promise.all([fetch(API_URL + "/transport/stops", { headers:{ Authorization:"Bearer " + token } }).then(r => { if (!r.ok) throw new Error(); return r.json(); }), getRoutes()])
-      .then(([stops, routes]) => { if (cancelled) return; setTransportRoutes(routes); stops.forEach(item => { const feature = wktFormatRef.current.readFeature(item.geometry, { dataProjection:"EPSG:4326", featureProjection:"EPSG:3857" }); const color = /^#[0-9a-f]{6}$/i.test(item.routeColor || "") ? item.routeColor : "#0f766e"; Object.entries({ id:item.id, endpoint:"transport/stops", type:"TransportStop", name:item.name, routeId:item.routeId, routeName:item.routeName, routeColor:color, color, sequenceNumber:item.sequenceNumber, isActive:item.isActive, username:item.createdUsername, createdDate:item.createdDate }).forEach(([k,v]) => feature.set(k,v)); feature.setStyle(new Style({ image:new CircleStyle({ radius:9, fill:new Fill({color}), stroke:new Stroke({color:"#fff",width:3}) }) })); source.addFeature(feature); }); })
+    fetch(API_URL + "/transport/stops", { headers:{ Authorization:"Bearer " + token } }).then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(stops => { if (cancelled) return; stops.forEach(item => { const feature = wktFormatRef.current.readFeature(item.geometry, { dataProjection:"EPSG:4326", featureProjection:"EPSG:3857" }); const color = /^#[0-9a-f]{6}$/i.test(item.routeColor || "") ? item.routeColor : "#0f766e"; Object.entries({ id:item.id, endpoint:"transport/stops", type:"TransportStop", name:item.name, routeId:item.routeId, routeName:item.routeName, routeColor:color, color, sequenceNumber:item.sequenceNumber, isActive:item.isActive, username:item.createdUsername, createdDate:item.createdDate }).forEach(([k,v]) => feature.set(k,v)); feature.setStyle(new Style({ image:new CircleStyle({ radius:9, fill:new Fill({color}), stroke:new Stroke({color:"#fff",width:3}) }) })); source.addFeature(feature); }); })
       .catch(() => setPopupError("Durak katmanı yüklenemedi."));
     return () => { cancelled = true; };
   }, [userInfo?.userId, userInfo?.permissions, queryReloadKey]);
+
+  function showCalculatedRoute(route) {
+    const source = transportRouteSourceRef.current;
+    const existing = source.getFeatures().find(feature => feature.get("routeId") === route.routeId);
+    if (existing) source.removeFeature(existing);
+    const feature = geoJsonFormatRef.current.readFeature({ type: "Feature", geometry: route.geometry, properties: {} }, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+    feature.setProperties({ routeId: route.routeId, name: route.name, color: route.color, selected: true });
+    source.getFeatures().forEach(item => item.set("selected", false));
+    source.addFeature(feature);
+    setSelectedTransportRouteId(route.routeId);
+    mapInstanceRef.current?.getView().fit(feature.getGeometry().getExtent(), { padding: [80, 500, 80, 80], duration: 500, maxZoom: 16 });
+  }
 
   useEffect(() => {
     if (!(userInfo?.permissions ?? []).includes("LocationAnalysis.Use")) return;
@@ -639,6 +706,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       wmsLayersRef.current[type]?.setVisible(isVisible);
       vectorLayersRef.current[type]?.setVisible(isVisible);
     });
+    transportRouteLayerRef.current?.setVisible(layerVisibility.TransportRoute);
   }, [layerVisibility]);
 
   useEffect(() => {
@@ -798,11 +866,15 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     }
 
     const selectedFeatures = new Collection([selectedFeature]);
-    const interactions = [
-      new Translate({ features: selectedFeatures })
-    ];
+    const translate = new Translate({ features: selectedFeatures, hitTolerance: 14 });
+    const targetElement = map.getTargetElement();
+    const setEditCursor = (cursor) => { if (targetElement) targetElement.style.cursor = cursor; };
+    translate.on("translatestart", () => setEditCursor("grabbing"));
+    translate.on("translateend", () => setEditCursor("grab"));
+    setEditCursor("grab");
+    const interactions = [translate];
 
-    if (selectedFeature.get("type") !== "Point") {
+    if (!["Point", "Poi", "TransportStop"].includes(selectedFeature.get("type"))) {
       interactions.push(new Modify({ features: selectedFeatures }));
     }
 
@@ -810,6 +882,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     editInteractionsRef.current = interactions;
 
     return () => {
+      setEditCursor("");
       clearEditInteractions();
     };
   }, [selectedFeature, isDetailEditing, isDetailSaving]);
@@ -1723,8 +1796,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       )}
 
       <section className="map-shell">
-        {transportPanelOpen && <TransportRoutePanel refreshKey={queryReloadKey} userInfo={userInfo} onClose={() => setTransportPanelOpen(false)} onAddStop={(route) => { setSelectedTransportRoute(route); setTransportPanelOpen(false); startDrawing("TransportStop"); }} />}
+        {transportPanelOpen && <TransportRoutePanel refreshKey={queryReloadKey} userInfo={userInfo} onClose={() => { setTransportPanelOpen(false); setSelectedTransportRouteId(null); }} onRouteCalculated={showCalculatedRoute} onRouteSelected={setSelectedTransportRouteId} onAddStop={(route) => { setSelectedTransportRoute(route); setTransportPanelOpen(false); startDrawing("TransportStop"); }} />}
         {(selectedTransportRoute || activeTool === "TransportStop") && <div className="transport-map-mode"><span style={{ background: selectedTransportRoute?.color || "#0f766e" }}/><div><strong>Durak ekleme modu aktif</strong><small>{selectedTransportRoute ? selectedTransportRoute.name + " güzergahına durak ekliyorsunuz. Haritada bir nokta seçin." : "Haritada bir nokta seçin."}</small></div><button type="button" onClick={() => { setSelectedTransportRoute(null); setActiveTool(null); cancelPendingFeature(); }}>İptal</button></div>}
+        {isDetailEditing && selectedFeature?.get("type") === "TransportStop" && <div className="transport-map-mode transport-edit-mode"><span style={{ background: selectedFeature.get("routeColor") || "#0f766e" }}/><div><strong>Durak taşıma modu aktif</strong><small>Durağı haritada sürükleyin, ardından detay penceresindeki Kaydet düğmesine basın.</small></div></div>}
         {locationPanelOpen && <aside className="location-analysis-panel">
           <div className="location-panel-header"><h2>Konum Analizi</h2><button type="button" onClick={() => clearLocationAnalysis(true)}>×</button></div>
           <section><h3>1. Hedef Bölge</h3><div className="target-method"><label><input type="radio" checked={targetMethod === "draw"} onChange={() => setTargetMethod("draw")}/> Polygon Çiz</label><label><input type="radio" checked={targetMethod === "province"} onChange={() => setTargetMethod("province")}/> İl Seç</label></div>{targetMethod === "draw" ? <button type="button" className="secondary-button" onClick={() => startDrawing("LocationAnalysis")}>{targetGeometry ? "Polygonu Yeniden Çiz" : "Haritada Polygon Çiz"}</button> : <select value={selectedProvince} onChange={e => selectProvince(e.target.value)}><option value="">İl seçin</option>{provinces.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select>}<small>{targetGeometry ? "Hedef alan hazır" : targetMethod === "province" && provinces.length === 0 ? "İl sınırı verisi henüz yüklenmemiş" : "Bir hedef bölge seçmeniz gerekir"}</small></section>
@@ -1806,6 +1880,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               onChange={handleLayerVisibilityChange}
             />
             Polygon
+          </label>}
+          {canSeeTransportRoutes && <label>
+            <input type="checkbox" name="TransportRoute" checked={layerVisibility.TransportRoute} onChange={handleLayerVisibilityChange} />
+            Ulaşım Güzergahları
           </label>}
         </div>}
         {canUseGeometryQuery && <div className="query-panel" aria-label="Sorgulama paneli">

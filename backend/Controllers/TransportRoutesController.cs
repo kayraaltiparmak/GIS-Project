@@ -14,31 +14,47 @@ public class TransportRoutesController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IUserPermissionService _permissions;
+    private readonly ITransportRouteCalculationService _routeCalculation;
     private readonly ILogger<TransportRoutesController> _logger;
-    public TransportRoutesController(AppDbContext db, IUserPermissionService permissions, ILogger<TransportRoutesController> logger) => (_db, _permissions, _logger) = (db, permissions, logger);
+    public TransportRoutesController(AppDbContext db, IUserPermissionService permissions, ITransportRouteCalculationService routeCalculation, ILogger<TransportRoutesController> logger) =>
+        (_db, _permissions, _routeCalculation, _logger) = (db, permissions, routeCalculation, logger);
 
     [HttpGet]
-    public async Task<IActionResult> List()
+    public async Task<IActionResult> List(CancellationToken cancellationToken)
     {
         try
         {
             var uid = UserId(); if (uid == null) return Unauthorized(); if (!await Allowed(uid.Value, "TransportRoute.View")) return Forbid();
-            var items = await _db.TblTransportRoutes.Where(x => x.IsActive && !x.IsDeleted).OrderBy(x => x.Name)
-                .Select(x => new TransportRouteResponse { Id = x.Id, Name = x.Name, Color = x.Color, CreatedDate = x.CreatedDate, IsActive = x.IsActive, StopCount = x.Stops.Count(s => !s.IsDeleted) }).AsNoTracking().ToListAsync();
+            var routes = await _db.TblTransportRoutes.Where(x => x.IsActive && !x.IsDeleted).OrderBy(x => x.Name)
+                .Include(x => x.Stops).AsNoTracking().ToListAsync(cancellationToken);
+            var items = routes.Select(ToResponse).ToList();
             return Ok(items);
         }
         catch (Exception ex) { return Error(ex); }
     }
 
     [HttpGet("{id:int}")]
-    public async Task<IActionResult> Detail(int id)
+    public async Task<IActionResult> Detail(int id, CancellationToken cancellationToken)
     {
         try
         {
             var uid = UserId(); if (uid == null) return Unauthorized(); if (!await Allowed(uid.Value, "TransportRoute.View")) return Forbid();
-            var item = await _db.TblTransportRoutes.Where(x => x.Id == id && x.IsActive && !x.IsDeleted)
-                .Select(x => new TransportRouteDetailResponse { Id = x.Id, Name = x.Name, Color = x.Color, CreatedDate = x.CreatedDate, IsActive = x.IsActive, StopCount = x.Stops.Count(s => !s.IsDeleted), Stops = x.Stops.Where(s => !s.IsDeleted).OrderBy(s => s.SequenceNumber).Select(s => new TransportStopResponse { Id = s.Id, Name = s.Name, Geometry = s.Geometry.AsText(), RouteId = s.RouteId, RouteName = x.Name, SequenceNumber = s.SequenceNumber, IsActive = s.IsActive }).ToList() }).AsNoTracking().FirstOrDefaultAsync();
-            return item == null ? NotFound() : Ok(item);
+            var route = await _db.TblTransportRoutes.Include(x => x.Stops).AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == id && x.IsActive && !x.IsDeleted, cancellationToken);
+            if (route == null) return NotFound();
+            var response = ToResponse(route);
+            return Ok(new TransportRouteDetailResponse
+            {
+                Id = response.Id, Name = response.Name, Color = response.Color, CreatedDate = response.CreatedDate,
+                IsActive = response.IsActive, StopCount = response.StopCount, Geometry = response.Geometry,
+                DistanceMeters = response.DistanceMeters, DurationSeconds = response.DurationSeconds,
+                RouteCalculatedAt = response.RouteCalculatedAt, RouteCalculationStatus = response.RouteCalculationStatus,
+                Stops = route.Stops.Where(s => !s.IsDeleted).OrderBy(s => s.SequenceNumber).Select(s => new TransportStopResponse
+                {
+                    Id = s.Id, Name = s.Name, Geometry = s.Geometry.AsText(), RouteId = s.RouteId,
+                    RouteName = route.Name, RouteColor = route.Color, SequenceNumber = s.SequenceNumber, IsActive = s.IsActive
+                }).ToList()
+            });
         }
         catch (Exception ex) { return Error(ex); }
     }
@@ -83,8 +99,24 @@ public class TransportRoutesController : ControllerBase
         catch (Exception ex) { return Error(ex); }
     }
 
+    [HttpPost("{routeId:int}/calculate")]
+    public async Task<IActionResult> Calculate(int routeId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var uid = UserId(); if (uid == null) return Unauthorized();
+            if (!await Allowed(uid.Value, "TransportRoute.Calculate")) return Forbid();
+            if (!await _db.TblTransportRoutes.AnyAsync(x => x.Id == routeId && x.IsActive && !x.IsDeleted, cancellationToken))
+                return NotFound("Guzergah bulunamadi.");
+            var result = await _routeCalculation.CalculateAsync(routeId, cancellationToken);
+            return result.Success ? Ok(result.Response) : BadRequest(result.Error);
+        }
+        catch (OperationCanceledException) { return StatusCode(499); }
+        catch (Exception ex) { return Error(ex); }
+    }
+
     [HttpPut("/api/transport-routes/{routeId:int}/reorder-stops")]
-    public async Task<IActionResult> ReorderStops(int routeId, ReorderTransportStopsRequest request)
+    public async Task<IActionResult> ReorderStops(int routeId, ReorderTransportStopsRequest request, CancellationToken cancellationToken)
     {
         try
         {
@@ -99,12 +131,27 @@ public class TransportRoutesController : ControllerBase
             {
                 var stop = stops.Single(x => x.Id == request.StopIds[index]); stop.SequenceNumber = index + 1; stop.ModifiedDate = DateTime.UtcNow;
             }
-            await _db.SaveChangesAsync(); await transaction.CommitAsync(); return NoContent();
+            await _db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var calculation = await _routeCalculation.CalculateAsync(routeId, cancellationToken);
+            return Ok(new { reordered = true, routeCalculationStatus = calculation.Success ? "Success" : "Failed", route = calculation.Response, routeCalculationError = calculation.Error });
         }
         catch (Exception ex) { return Error(ex); }
     }
 
     private int? UserId() => int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : null;
     private Task<bool> Allowed(int userId, string code) => _permissions.HasPermissionAsync(userId, code);
+    private static TransportRouteResponse ToResponse(TblTransportRoute route) => new()
+    {
+        Id = route.Id, Name = route.Name, Color = route.Color, CreatedDate = route.CreatedDate,
+        IsActive = route.IsActive, StopCount = route.Stops.Count(s => !s.IsDeleted),
+        Geometry = route.Geometry == null ? null : new
+        {
+            type = "LineString",
+            coordinates = route.Geometry.Coordinates.Select(c => new[] { c.X, c.Y }).ToArray()
+        },
+        DistanceMeters = route.DistanceMeters, DurationSeconds = route.DurationSeconds,
+        RouteCalculatedAt = route.RouteCalculatedAt, RouteCalculationStatus = route.RouteCalculationStatus
+    };
     private IActionResult Error(Exception ex) { _logger.LogError(ex, "Transport route endpoint failed."); return StatusCode(500, "Islem sirasinda beklenmeyen bir hata olustu."); }
 }

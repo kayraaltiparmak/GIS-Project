@@ -14,8 +14,21 @@ public class TransportRouteResponse
     public int StopCount { get; set; }
     public DateTime CreatedDate { get; set; }
     public bool IsActive { get; set; }
+    public object? Geometry { get; set; }
+    public double? DistanceMeters { get; set; }
+    public double? DurationSeconds { get; set; }
+    public DateTime? RouteCalculatedAt { get; set; }
+    public string? RouteCalculationStatus { get; set; }
 }
 public sealed class TransportRouteDetailResponse : TransportRouteResponse { public List<TransportStopResponse> Stops { get; set; } = []; }
+public sealed class CalculateTransportRouteResponse
+{
+    public int RouteId { get; set; }
+    public object Geometry { get; set; } = null!;
+    public double DistanceMeters { get; set; }
+    public double DurationSeconds { get; set; }
+    public DateTime CalculatedAt { get; set; }
+}
 public sealed class TransportStopRequest
 {
     [Required, MinLength(1)] public string Name { get; set; } = "";

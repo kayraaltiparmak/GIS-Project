@@ -1,3 +1,5 @@
+using NetTopologySuite.Geometries;
+
 namespace backend.Models;
 
 public class TblTransportRoute
@@ -11,5 +13,11 @@ public class TblTransportRoute
     public User CreatedUser { get; set; } = null!;
     public bool IsActive { get; set; } = true;
     public bool IsDeleted { get; set; }
+    public LineString? Geometry { get; set; }
+    public double? DistanceMeters { get; set; }
+    public double? DurationSeconds { get; set; }
+    public DateTime? RouteCalculatedAt { get; set; }
+    public string? RouteCalculationStatus { get; set; }
+    public string? RouteCalculationError { get; set; }
     public ICollection<TblTransportStop> Stops { get; set; } = [];
 }

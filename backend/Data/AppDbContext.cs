@@ -198,6 +198,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ProvinceBoundary>().HasIndex(x => x.Name).IsUnique();
         modelBuilder.Entity<ProvinceBoundary>().HasIndex(x => x.Geometry).HasMethod("gist");
         modelBuilder.Entity<TblTransportRoute>().HasIndex(x => x.Name);
+        modelBuilder.Entity<TblTransportRoute>().Property(x => x.Geometry).HasColumnType("geometry(LineString,4326)");
+        modelBuilder.Entity<TblTransportRoute>().HasIndex(x => x.Geometry).HasMethod("gist");
         modelBuilder.Entity<TblTransportRoute>().HasOne(x => x.CreatedUser).WithMany().HasForeignKey(x => x.CreatedUserId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<TblTransportStop>().Property(x => x.Geometry).HasColumnType("geometry(Point,4326)");
         modelBuilder.Entity<TblTransportStop>().HasOne(x => x.Route).WithMany(x => x.Stops).HasForeignKey(x => x.RouteId).OnDelete(DeleteBehavior.Restrict);

@@ -17,6 +17,7 @@ export const getRouteById = (id) => request("/transport/routes/" + id);
 export const createRoute = (route) => request("/transport/routes", { method: "POST", body: JSON.stringify(route) });
 export const updateRoute = (id, route) => request("/transport/routes/" + id, { method: "PUT", body: JSON.stringify(route) });
 export const deleteRoute = (id) => request("/transport/routes/" + id, { method: "DELETE" });
+export const calculateRoute = (id) => request("/transport/routes/" + id + "/calculate", { method: "POST" });
 export const reorderRouteStops = (routeId, stopIds) => request("/transport-routes/" + routeId + "/reorder-stops", { method: "PUT", body: JSON.stringify({ stopIds }) });
 export const getStops = (routeId) => request("/transport/stops" + (routeId ? "?routeId=" + routeId : ""));
 export const createStop = (stop) => request("/transport/stops", { method: "POST", body: JSON.stringify(stop) });

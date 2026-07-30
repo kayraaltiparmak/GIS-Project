@@ -16,6 +16,14 @@ builder.Services.AddScoped<IInventoryAnalysisService, InventoryAnalysisService>(
 builder.Services.AddScoped<IUserPermissionService, UserPermissionService>();
 builder.Services.AddScoped<IGeographicPermissionService, GeographicPermissionService>();
 builder.Services.AddScoped<ILocationAnalysisService, LocationAnalysisService>();
+builder.Services.AddScoped<ITransportRouteCalculationService, TransportRouteCalculationService>();
+builder.Services.AddHttpClient<IOsrmService, OsrmService>((services, client) =>
+{
+    var baseUrl = services.GetRequiredService<IConfiguration>()["Osrm:BaseUrl"]
+        ?? throw new InvalidOperationException("Osrm:BaseUrl configuration is missing.");
+    client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
 
 builder.Services.AddCors(options =>
 {

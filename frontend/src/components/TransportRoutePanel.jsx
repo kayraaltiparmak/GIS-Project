@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { createRoute, deleteRoute, getRouteById, getRoutes, reorderRouteStops, updateRoute } from "../services/transportService";
+import { calculateRoute, createRoute, deleteRoute, getRouteById, getRoutes, reorderRouteStops, updateRoute } from "../services/transportService";
 
 const EMPTY_FORM = { name: "", color: "#2563EB", isActive: true };
 const ROUTE_COLORS = ["#2563EB", "#4F46E5", "#7C3AED", "#DB2777", "#E11D48", "#DC2626", "#EA580C", "#D97706", "#16A34A", "#059669", "#0891B2", "#334155"];
@@ -15,12 +15,13 @@ function SortableStop({ stop, disabled }) {
   </li>;
 }
 
-export default function TransportRoutePanel({ userInfo, onClose, onAddStop, refreshKey }) {
+export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRouteCalculated, onRouteSelected, refreshKey }) {
   const permissions = new Set(userInfo?.permissions ?? []);
   const canView = permissions.has("TransportRoute.View");
   const canCreate = permissions.has("TransportRoute.Create");
   const canUpdate = permissions.has("TransportRoute.Update");
   const canDelete = permissions.has("TransportRoute.Delete");
+  const canCalculate = permissions.has("TransportRoute.Calculate");
   const [routes, setRoutes] = useState([]);
   const [detail, setDetail] = useState(null);
   const [mode, setMode] = useState("list");
@@ -36,7 +37,7 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, refr
   useEffect(() => { if (canView) loadRoutes(); else setLoading(false); }, [canView]);
   useEffect(() => { if (!refreshKey || !canView) return; loadRoutes(); if (detail?.id) getRouteById(detail.id).then(setDetail).catch(e => setError(e.message)); }, [refreshKey]);
 
-  async function openDetail(id) { setLoading(true); setError(""); try { setDetail(await getRouteById(id)); setMode("detail"); } catch (e) { setError(e.message); } finally { setLoading(false); } }
+  async function openDetail(id) { setLoading(true); setError(""); try { const route = await getRouteById(id); setDetail(route); onRouteSelected?.(route.id); setMode("detail"); } catch (e) { setError(e.message); } finally { setLoading(false); } }
   function openCreate() { setForm(EMPTY_FORM); setError(""); setMode("create"); }
   function openEdit(route) { setForm({ name: route.name, color: route.color, isActive: route.isActive }); setDetail(route); setError(""); setMode("edit"); }
   async function submit(event) {
@@ -48,7 +49,24 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, refr
     if (!over || active.id === over.id || !detail) return;
     const oldStops = detail.stops; const oldIndex = oldStops.findIndex(x => x.id === active.id); const newIndex = oldStops.findIndex(x => x.id === over.id);
     const reordered = arrayMove(oldStops, oldIndex, newIndex).map((x, index) => ({ ...x, sequenceNumber: index + 1 })); setDetail({ ...detail, stops: reordered }); setError("");
-    try { await reorderRouteStops(detail.id, reordered.map(x => x.id)); setMessage("Sıralama kaydedildi."); } catch (e) { setDetail({ ...detail, stops: oldStops }); setError(e.message); }
+    try {
+      const result = await reorderRouteStops(detail.id, reordered.map(x => x.id));
+      if (result?.route) onRouteCalculated?.({ ...result.route, color: detail.color, name: detail.name });
+      setDetail(await getRouteById(detail.id));
+      setMessage(result?.routeCalculationStatus === "Failed" ? "Sıralama kaydedildi; rota yeniden hesaplanamadı." : "Sıralama kaydedildi ve rota hesaplandı.");
+      if (result?.routeCalculationError) setError(result.routeCalculationError);
+    } catch (e) { setDetail({ ...detail, stops: oldStops }); setError(e.message); }
+  }
+  async function calculate() {
+    if (!detail || detail.stops.filter(x => x.isActive).length < 2) return;
+    setSaving(true); setError(""); setMessage("");
+    try {
+      const result = await calculateRoute(detail.id);
+      onRouteCalculated?.({ ...result, color: detail.color, name: detail.name });
+      setDetail(await getRouteById(detail.id));
+      setMessage("Rota başarıyla hesaplandı.");
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
   }
 
   if (!canView) return <aside className="transport-panel"><div className="transport-header"><h2>Güzergah Yönetimi</h2><button onClick={onClose}>×</button></div><p className="transport-error">Bu panele erişim yetkiniz yok.</p></aside>;
@@ -61,8 +79,9 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, refr
       {mode === "edit" && <label className="transport-check"><input type="checkbox" checked={form.isActive} onChange={e => setForm({ ...form, isActive: e.target.checked })}/> Aktif</label>}
       <div className="transport-actions"><button type="button" className="secondary-button" onClick={() => setMode("list")}>Vazgeç</button><button className="primary-button" disabled={saving}>{saving ? "Kaydediliyor…" : "Kaydet"}</button></div>
     </form> : mode === "detail" && detail ? <div className="transport-detail">
-      <button type="button" className="transport-back" onClick={() => setMode("list")}>← Listeye dön</button><div className="route-title"><span style={{ background: detail.color }}/><div><h3>{detail.name}</h3><small>{detail.color} · {detail.stopCount} durak</small></div></div>
-      <div className="transport-actions">{canUpdate && <button className="secondary-button" onClick={() => openEdit(detail)}>Düzenle</button>}{permissions.has("TransportStop.Create") && <button className="primary-button" onClick={() => onAddStop({ id: detail.id, name: detail.name, color: detail.color })}>Güzergaha Durak Ekle</button>}</div>
+      <button type="button" className="transport-back" onClick={() => { setMode("list"); onRouteSelected?.(null); }}>← Listeye dön</button><div className="route-title"><span style={{ background: detail.color }}/><div><h3>{detail.name}</h3><small>{detail.color} · {detail.stopCount} durak</small></div></div>
+      <div className="transport-actions">{canUpdate && <button className="secondary-button" onClick={() => openEdit(detail)}>Düzenle</button>}{canCalculate && <button className="primary-button" onClick={calculate} disabled={saving || detail.stops.filter(x => x.isActive).length < 2} title={detail.stops.filter(x => x.isActive).length < 2 ? "En az iki aktif durak gereklidir." : ""}>{saving ? "Hesaplanıyor…" : "Rotayı Hesapla"}</button>}{permissions.has("TransportStop.Create") && <button className="primary-button" onClick={() => onAddStop({ id: detail.id, name: detail.name, color: detail.color })}>Güzergaha Durak Ekle</button>}</div>
+      {detail.routeCalculationStatus && <small>Rota durumu: {detail.routeCalculationStatus}{detail.distanceMeters != null ? ` · ${(detail.distanceMeters / 1000).toFixed(1)} km` : ""}{detail.durationSeconds != null ? ` · ${Math.round(detail.durationSeconds / 60)} dk` : ""}</small>}
       <h3>Duraklar</h3>{detail.stops.length === 0 ? <div className="transport-empty">Durak bulunamadı.</div> : <DndContext sensors={sensors} onDragEnd={dragEnd}><SortableContext items={detail.stops.map(x => x.id)} strategy={verticalListSortingStrategy}><ol className="transport-stops">{detail.stops.map(stop => <SortableStop key={stop.id} stop={stop} disabled={!canUpdate}/>)}</ol></SortableContext></DndContext>}
     </div> : <div className="transport-list">
       {canCreate && <button type="button" className="primary-button new-route" onClick={openCreate}>+ Yeni Güzergah</button>}

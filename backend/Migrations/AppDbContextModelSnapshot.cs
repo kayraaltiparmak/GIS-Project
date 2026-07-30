@@ -672,6 +672,15 @@ namespace backend.Migrations
                     b.Property<int>("CreatedUserId")
                         .HasColumnType("integer");
 
+                    b.Property<double?>("DistanceMeters")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("DurationSeconds")
+                        .HasColumnType("double precision");
+
+                    b.Property<LineString>("Geometry")
+                        .HasColumnType("geometry(LineString,4326)");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -685,9 +694,22 @@ namespace backend.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTime?>("RouteCalculatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RouteCalculationError")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RouteCalculationStatus")
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedUserId");
+
+                    b.HasIndex("Geometry");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Geometry"), "gist");
 
                     b.HasIndex("Name");
 
