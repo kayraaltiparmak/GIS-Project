@@ -654,6 +654,96 @@ namespace backend.Migrations
                     b.ToTable("TblRolePermissions");
                 });
 
+            modelBuilder.Entity("backend.Models.TblTransportRoute", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Color")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("CreatedUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("ModifiedDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedUserId");
+
+                    b.HasIndex("Name");
+
+                    b.ToTable("TblTransportRoutes");
+                });
+
+            modelBuilder.Entity("backend.Models.TblTransportStop", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("CreatedUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<Point>("Geometry")
+                        .IsRequired()
+                        .HasColumnType("geometry(Point,4326)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("ModifiedDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("RouteId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SequenceNumber")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedUserId");
+
+                    b.HasIndex("Geometry");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Geometry"), "gist");
+
+                    b.HasIndex("RouteId", "SequenceNumber");
+
+                    b.ToTable("TblTransportStops");
+                });
+
             modelBuilder.Entity("backend.Models.TblUserGeographicPermission", b =>
                 {
                     b.Property<int>("Id")
@@ -920,6 +1010,36 @@ namespace backend.Migrations
                     b.Navigation("Role");
                 });
 
+            modelBuilder.Entity("backend.Models.TblTransportRoute", b =>
+                {
+                    b.HasOne("backend.Models.User", "CreatedUser")
+                        .WithMany()
+                        .HasForeignKey("CreatedUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("CreatedUser");
+                });
+
+            modelBuilder.Entity("backend.Models.TblTransportStop", b =>
+                {
+                    b.HasOne("backend.Models.User", "CreatedUser")
+                        .WithMany()
+                        .HasForeignKey("CreatedUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("backend.Models.TblTransportRoute", "Route")
+                        .WithMany("Stops")
+                        .HasForeignKey("RouteId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("CreatedUser");
+
+                    b.Navigation("Route");
+                });
+
             modelBuilder.Entity("backend.Models.TblUserGeographicPermission", b =>
                 {
                     b.HasOne("backend.Models.User", "User")
@@ -963,6 +1083,11 @@ namespace backend.Migrations
             modelBuilder.Entity("backend.Models.TblPoiCategory", b =>
                 {
                     b.Navigation("Children");
+                });
+
+            modelBuilder.Entity("backend.Models.TblTransportRoute", b =>
+                {
+                    b.Navigation("Stops");
                 });
 #pragma warning restore 612, 618
         }

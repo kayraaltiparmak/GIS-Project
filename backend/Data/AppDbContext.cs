@@ -32,6 +32,8 @@ public class AppDbContext : DbContext
     public DbSet<TblPoi> TblPois { get; set; }
     public DbSet<LocationAnalysisResult> LocationAnalysisResults { get; set; }
     public DbSet<ProvinceBoundary> ProvinceBoundaries { get; set; }
+    public DbSet<TblTransportRoute> TblTransportRoutes { get; set; }
+    public DbSet<TblTransportStop> TblTransportStops { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -195,5 +197,12 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ProvinceBoundary>().Property(x => x.Geometry).HasColumnType("geometry(Geometry,4326)");
         modelBuilder.Entity<ProvinceBoundary>().HasIndex(x => x.Name).IsUnique();
         modelBuilder.Entity<ProvinceBoundary>().HasIndex(x => x.Geometry).HasMethod("gist");
+        modelBuilder.Entity<TblTransportRoute>().HasIndex(x => x.Name);
+        modelBuilder.Entity<TblTransportRoute>().HasOne(x => x.CreatedUser).WithMany().HasForeignKey(x => x.CreatedUserId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblTransportStop>().Property(x => x.Geometry).HasColumnType("geometry(Point,4326)");
+        modelBuilder.Entity<TblTransportStop>().HasOne(x => x.Route).WithMany(x => x.Stops).HasForeignKey(x => x.RouteId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblTransportStop>().HasOne(x => x.CreatedUser).WithMany().HasForeignKey(x => x.CreatedUserId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TblTransportStop>().HasIndex(x => new { x.RouteId, x.SequenceNumber });
+        modelBuilder.Entity<TblTransportStop>().HasIndex(x => x.Geometry).HasMethod("gist");
     }
 }

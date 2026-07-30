@@ -49,7 +49,8 @@ function Navbar({
   onLogout,
   onStartDrawing,
   onToggleHeatmap,
-  onLocationAnalysis
+  onLocationAnalysis,
+  onTransportRoutes
 }) {
   const permissions = new Set(userInfo?.permissions ?? []);
   const canOpenAdminPanel =
@@ -102,6 +103,10 @@ function Navbar({
         {permissions.has("LocationAnalysis.Use") && (
           <button type="button" onClick={onLocationAnalysis}>Konum Analizi</button>
         )}
+        {["TransportRoute.View", "TransportRoute.Create", "TransportRoute.Update", "TransportRoute.Delete"].some(code => permissions.has(code)) && (
+          <button type="button" onClick={onTransportRoutes}>Güzergah Yönetimi</button>
+        )}
+        {permissions.has("TransportStop.Create") && <button type="button" className={activeTool === "TransportStop" ? "active-nav-tool" : ""} onClick={() => onStartDrawing("TransportStop")}>Durak Ekle</button>}
         {permissions.has("Inventory.Analyze") && (
           <button
             type="button"

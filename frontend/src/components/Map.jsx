@@ -24,6 +24,8 @@ import CircleStyle from "ol/style/Circle";
 import Icon from "ol/style/Icon";
 import { unByKey } from "ol/Observable";
 import Navbar from "./Navbar";
+import TransportRoutePanel from "./TransportRoutePanel";
+import { getRoutes } from "../services/transportService";
 import {
   GEOSERVER_DEBUG,
   GEOSERVER_HEATMAP_STYLE,
@@ -77,6 +79,7 @@ const drawSettings = {
   Polygon: { drawType: "Polygon", endpoint: "TblPolygon" },
   InventoryAnalysis: { drawType: "Polygon", endpoint: "InventoryAnalysis" }
   ,LocationAnalysis: { drawType: "Polygon", endpoint: "LocationAnalysis" }
+  ,TransportStop: { drawType: "Point", endpoint: "transport/stops" }
 };
 
 const WMS_Z_INDEX = {
@@ -330,6 +333,14 @@ function ColorPickerField({ value, onChange, disabled = false }) {
 }
 
 function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
+  const mapPermissions = new Set(userInfo?.permissions ?? []);
+  const isMapAdmin = Boolean(userInfo?.isAdmin);
+  const canSeePoiLayer = isMapAdmin || ["Poi.View", "Poi.Create", "Poi.Update", "Poi.Delete", "Poi.Manage", "Poi.Search"].some(x => mapPermissions.has(x));
+  const canSeePointLayer = isMapAdmin || ["Point.Create", "Point.Update", "Point.Delete"].some(x => mapPermissions.has(x));
+  const canSeeLineLayer = isMapAdmin || ["Line.Create", "Line.Update", "Line.Delete"].some(x => mapPermissions.has(x));
+  const canSeePolygonLayer = isMapAdmin || ["Polygon.Create", "Polygon.Update", "Polygon.Delete"].some(x => mapPermissions.has(x));
+  const canUseGeometryQuery = isMapAdmin || canSeePointLayer || canSeeLineLayer || canSeePolygonLayer || mapPermissions.has("Inventory.Analyze");
+  const visibleLayerToggleCount = [canSeePoiLayer, canSeePointLayer, canSeeLineLayer, canSeePolygonLayer].filter(Boolean).length;
   const mapElementRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const drawInteractionRef = useRef(null);
@@ -340,6 +351,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     Point: new VectorSource(),
     Line: new VectorSource(),
     Polygon: new VectorSource()
+    ,TransportStop: new VectorSource()
   });
   const analysisSourceRef = useRef(new VectorSource());
   const vectorLayersRef = useRef({});
@@ -369,6 +381,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     Point: true,
     Line: true,
     Polygon: true
+    ,TransportStop: true
   });
   const [attributeForm, setAttributeForm] = useState({ name: "", color: DEFAULT_COLOR });
   const [poiCategories, setPoiCategories] = useState([]);
@@ -403,6 +416,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const [targetMethod, setTargetMethod] = useState("draw");
   const [provinces, setProvinces] = useState([]);
   const [selectedProvince, setSelectedProvince] = useState("");
+  const [transportPanelOpen, setTransportPanelOpen] = useState(false);
+  const [selectedTransportRoute, setSelectedTransportRoute] = useState(null);
+  const [transportRoutes, setTransportRoutes] = useState([]);
 
   useEffect(() => {
     onLogoutRef.current = onLogout;
@@ -484,7 +500,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       Polygon: new VectorLayer({
         source: vectorSourcesRef.current.Polygon,
         zIndex: WMS_Z_INDEX.Selection
-      })
+      }),
+      TransportStop: new VectorLayer({ source: vectorSourcesRef.current.TransportStop, zIndex: WMS_Z_INDEX.Selection + 3 })
     };
     analysisLayerRef.current = new VectorLayer({
       source: analysisSourceRef.current,
@@ -523,6 +540,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         vectorLayersRef.current.Line,
         vectorLayersRef.current.Point,
         vectorLayersRef.current.Poi,
+        vectorLayersRef.current.TransportStop,
         analysisLayerRef.current
       ],
       view: new View({
@@ -600,6 +618,17 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   }, [userInfo?.userId, userInfo?.permissions, queryReloadKey]);
 
   useEffect(() => {
+    const canView = (userInfo?.permissions ?? []).includes("TransportStop.View");
+    const source = vectorSourcesRef.current.TransportStop; source.clear();
+    if (!canView) return;
+    let cancelled = false; const token = localStorage.getItem(TOKEN_KEY);
+    Promise.all([fetch(API_URL + "/transport/stops", { headers:{ Authorization:"Bearer " + token } }).then(r => { if (!r.ok) throw new Error(); return r.json(); }), getRoutes()])
+      .then(([stops, routes]) => { if (cancelled) return; setTransportRoutes(routes); stops.forEach(item => { const feature = wktFormatRef.current.readFeature(item.geometry, { dataProjection:"EPSG:4326", featureProjection:"EPSG:3857" }); const color = /^#[0-9a-f]{6}$/i.test(item.routeColor || "") ? item.routeColor : "#0f766e"; Object.entries({ id:item.id, endpoint:"transport/stops", type:"TransportStop", name:item.name, routeId:item.routeId, routeName:item.routeName, routeColor:color, color, sequenceNumber:item.sequenceNumber, isActive:item.isActive, username:item.createdUsername, createdDate:item.createdDate }).forEach(([k,v]) => feature.set(k,v)); feature.setStyle(new Style({ image:new CircleStyle({ radius:9, fill:new Fill({color}), stroke:new Stroke({color:"#fff",width:3}) }) })); source.addFeature(feature); }); })
+      .catch(() => setPopupError("Durak katmanı yüklenemedi."));
+    return () => { cancelled = true; };
+  }, [userInfo?.userId, userInfo?.permissions, queryReloadKey]);
+
+  useEffect(() => {
     if (!(userInfo?.permissions ?? []).includes("LocationAnalysis.Use")) return;
     fetch(API_URL + "/provinces", { headers: { Authorization: "Bearer " + localStorage.getItem(TOKEN_KEY) } })
       .then(r => r.ok ? r.json() : []).then(setProvinces).catch(() => setProvinces([]));
@@ -611,6 +640,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       vectorLayersRef.current[type]?.setVisible(isVisible);
     });
   }, [layerVisibility]);
+
+  useEffect(() => {
+    setLayerVisibility(current => ({ ...current, Poi:canSeePoiLayer && current.Poi, Point:canSeePointLayer && current.Point, Line:canSeeLineLayer && current.Line, Polygon:canSeePolygonLayer && current.Polygon }));
+  }, [canSeePoiLayer, canSeePointLayer, canSeeLineLayer, canSeePolygonLayer]);
 
   useEffect(() => {
     Object.keys(GEOSERVER_LAYERS).forEach((type) => updateWmsCqlFilter(type));
@@ -626,6 +659,12 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
 
   useEffect(() => {
     let isCancelled = false;
+
+    if (!canUseGeometryQuery) {
+      setQueryResults([]);
+      setQueryError("");
+      return;
+    }
 
     async function loadQueryResults() {
       const token = localStorage.getItem(TOKEN_KEY);
@@ -686,7 +725,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     return () => {
       isCancelled = true;
     };
-  }, [queryFilters, queryReloadKey]);
+  }, [queryFilters, queryReloadKey, canUseGeometryQuery]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -729,7 +768,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       }
 
       setPendingFeature({ feature: event.feature, endpoint: setting.endpoint });
-      setAttributeForm({ name: "", color: DEFAULT_COLOR, categoryId: "", workingHours: "" });
+      setAttributeForm({ name: "", color: DEFAULT_COLOR, categoryId: "", workingHours: "", routeId: selectedTransportRoute?.id || "" });
       setPopupError("");
       setInventoryMessage("");
       activeToolRef.current = null;
@@ -1002,7 +1041,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
 
     try {
       const results = await getFeaturesFromLayers({
-        types: visibleTypes,
+        types: visibleTypes.filter(type => GEOSERVER_LAYERS[type]),
         userId: currentUserId,
         bbox: [x - tolerance, y - tolerance, x + tolerance, y + tolerance],
         maxFeatures: 10
@@ -1148,7 +1187,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   }
 
   function syncFallbackFeatures(records) {
-    Object.values(vectorSourcesRef.current).forEach((source) => source.clear());
+    ["Point", "Line", "Polygon"].forEach(type => vectorSourcesRef.current[type].clear());
     heatmapSourceRef.current.clear();
 
     records.forEach((record) => {
@@ -1186,6 +1225,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   }
 
   function startDrawing(tool) {
+    if (tool !== "TransportStop") setSelectedTransportRoute(null);
     setSelectionFeatures([]);
     closeDetailPopup();
     setActiveTool(tool);
@@ -1309,7 +1349,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       name: feature.get("name") || "",
       color,
       categoryId: feature.get("categoryId") || "",
-      workingHours: feature.get("workingHours") || ""
+      workingHours: feature.get("workingHours") || "",
+      routeId: feature.get("routeId") || ""
     });
     setIsDetailEditing(false);
     setIsDetailSaving(false);
@@ -1350,6 +1391,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     setPendingFeature(null);
     setPopupError("");
     setIsSaving(false);
+    if (pendingFeature?.endpoint === "transport/stops") setSelectedTransportRoute(null);
   }
 
   async function handleAttributeSubmit(event) {
@@ -1367,6 +1409,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       setPopupError("Kategori seçin.");
       return;
     }
+    if (pendingFeature.endpoint === "transport/stops" && !attributeForm.routeId) { setPopupError("Güzergah seçilmelidir."); return; }
 
     setIsSaving(true);
     setPopupError("");
@@ -1387,6 +1430,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     if (pendingFeature.endpoint === "TblPolygon" && typeof saveResult.data?.inventoryCount === "number") {
       setInventoryMessage("Polygon \u00e7inde " + saveResult.data.inventoryCount + " adet nokta var");
     }
+    if (pendingFeature.endpoint === "transport/stops") { getSourceForEndpoint(pendingFeature.endpoint)?.removeFeature(pendingFeature.feature); setPendingFeature(null); setIsSaving(false); setSelectedTransportRoute(null); setPopupError(""); setInventoryMessage("Durak başarıyla eklendi."); setQueryReloadKey(current => current + 1); return; }
 
     const isPoi = pendingFeature.endpoint === "Pois";
     pendingFeature.feature.set("name", attributeForm.name.trim());
@@ -1435,7 +1479,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
           "Authorization": "Bearer " + token,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify(endpoint === "Pois" ? { wkt, name, categoryId: Number(attributeForm.categoryId), workingHours: attributeForm.workingHours, isActive: true } : { wkt, name, color })
+        body: JSON.stringify(endpoint === "Pois" ? { wkt, name, categoryId: Number(attributeForm.categoryId), workingHours: attributeForm.workingHours, isActive: true } : endpoint === "transport/stops" ? { name, routeId:Number(attributeForm.routeId), geometry:geoJsonFormatRef.current.writeGeometryObject(feature.getGeometry(), { featureProjection:"EPSG:3857", dataProjection:"EPSG:4326" }), isActive:true } : { wkt, name, color })
       });
 
       if (!response.ok) {
@@ -1536,6 +1580,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       setDetailError("Isim alanini doldurun.");
       return;
     }
+    if (selectedFeature.get("type") === "TransportStop" && !detailForm.routeId) { setDetailError("Güzergah seçilmelidir."); return; }
 
     const endpoint = selectedFeature.get("endpoint");
     const id = selectedFeature.get("id");
@@ -1561,7 +1606,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         },
         body: JSON.stringify(endpoint === "Pois"
           ? { wkt, name: detailForm.name.trim(), categoryId: Number(detailForm.categoryId), workingHours: detailForm.workingHours, isActive: true }
-          : { wkt, name: detailForm.name.trim(), color: detailForm.color })
+          : endpoint === "transport/stops" ? { name:detailForm.name.trim(), routeId:Number(detailForm.routeId), geometry:geoJsonFormatRef.current.writeGeometryObject(selectedFeature.getGeometry(), { featureProjection:"EPSG:3857", dataProjection:"EPSG:4326" }), isActive:true } : { wkt, name: detailForm.name.trim(), color: detailForm.color })
       });
 
       if (response.status === 401) {
@@ -1575,6 +1620,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       }
 
       selectedFeature.set("name", detailForm.name.trim());
+      if (endpoint === "transport/stops") { setInventoryMessage("Durak güncellendi."); closeDetailPopup(); setQueryReloadKey(current => current + 1); return; }
       selectedFeature.set("color", detailForm.color);
       selectedFeature.setStyle(createFeatureStyle(detailForm.color));
       originalDetailGeometryRef.current = null;
@@ -1636,6 +1682,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       refreshWmsLayer(selectedFeature.get("type"));
       closeDetailPopup();
       setQueryReloadKey((current) => current + 1);
+      if (endpoint === "transport/stops") setInventoryMessage("Durak silindi.");
     } catch {
       setDetailError("Sunucuya baglanilamadi.");
     } finally {
@@ -1661,6 +1708,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         onStartDrawing={startDrawing}
         onToggleHeatmap={toggleHeatmapAnalysis}
         onLocationAnalysis={() => setLocationPanelOpen(true)}
+        onTransportRoutes={() => setTransportPanelOpen(true)}
       />
       {false && (
       <header className="topbar">
@@ -1675,6 +1723,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       )}
 
       <section className="map-shell">
+        {transportPanelOpen && <TransportRoutePanel refreshKey={queryReloadKey} userInfo={userInfo} onClose={() => setTransportPanelOpen(false)} onAddStop={(route) => { setSelectedTransportRoute(route); setTransportPanelOpen(false); startDrawing("TransportStop"); }} />}
+        {(selectedTransportRoute || activeTool === "TransportStop") && <div className="transport-map-mode"><span style={{ background: selectedTransportRoute?.color || "#0f766e" }}/><div><strong>Durak ekleme modu aktif</strong><small>{selectedTransportRoute ? selectedTransportRoute.name + " güzergahına durak ekliyorsunuz. Haritada bir nokta seçin." : "Haritada bir nokta seçin."}</small></div><button type="button" onClick={() => { setSelectedTransportRoute(null); setActiveTool(null); cancelPendingFeature(); }}>İptal</button></div>}
         {locationPanelOpen && <aside className="location-analysis-panel">
           <div className="location-panel-header"><h2>Konum Analizi</h2><button type="button" onClick={() => clearLocationAnalysis(true)}>×</button></div>
           <section><h3>1. Hedef Bölge</h3><div className="target-method"><label><input type="radio" checked={targetMethod === "draw"} onChange={() => setTargetMethod("draw")}/> Polygon Çiz</label><label><input type="radio" checked={targetMethod === "province"} onChange={() => setTargetMethod("province")}/> İl Seç</label></div>{targetMethod === "draw" ? <button type="button" className="secondary-button" onClick={() => startDrawing("LocationAnalysis")}>{targetGeometry ? "Polygonu Yeniden Çiz" : "Haritada Polygon Çiz"}</button> : <select value={selectedProvince} onChange={e => selectProvince(e.target.value)}><option value="">İl seçin</option>{provinces.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select>}<small>{targetGeometry ? "Hedef alan hazır" : targetMethod === "province" && provinces.length === 0 ? "İl sınırı verisi henüz yüklenmemiş" : "Bir hedef bölge seçmeniz gerekir"}</small></section>
@@ -1725,12 +1775,12 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
           <button type="button" className="close-tool" onClick={onLogout}>Close</button>
         </div>
         )}
-        <div className="layer-control" aria-label="Layer kontrol">
-          <label>
+        {visibleLayerToggleCount > 0 && <div className="layer-control" aria-label="Layer kontrol">
+          {canSeePoiLayer && <label>
             <input type="checkbox" name="Poi" checked={layerVisibility.Poi} onChange={handleLayerVisibilityChange} />
             POI
-          </label>
-          <label>
+          </label>}
+          {canSeePointLayer && <label>
             <input
               type="checkbox"
               name="Point"
@@ -1738,8 +1788,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               onChange={handleLayerVisibilityChange}
             />
             Point
-          </label>
-          <label>
+          </label>}
+          {canSeeLineLayer && <label>
             <input
               type="checkbox"
               name="Line"
@@ -1747,8 +1797,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               onChange={handleLayerVisibilityChange}
             />
             Line
-          </label>
-          <label>
+          </label>}
+          {canSeePolygonLayer && <label>
             <input
               type="checkbox"
               name="Polygon"
@@ -1756,9 +1806,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               onChange={handleLayerVisibilityChange}
             />
             Polygon
-          </label>
-        </div>
-        <div className="query-panel" aria-label="Sorgulama paneli">
+          </label>}
+        </div>}
+        {canUseGeometryQuery && <div className="query-panel" aria-label="Sorgulama paneli">
           <div className="query-panel-header">
             <h2>Sorgulama</h2>
             <span>{queryResults.length}</span>
@@ -1823,7 +1873,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               <div className="query-empty">Kayit yok</div>
             )}
           </div>
-        </div>
+        </div>}
         {inventoryMessage && (
           <div className="inventory-message">{inventoryMessage}</div>
         )}
@@ -1865,7 +1915,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               {pendingFeature.endpoint === "Pois" ? <>
                 <label>Kategori<select name="categoryId" value={attributeForm.categoryId || ""} onChange={handleAttributeChange}><option value="">Kategori seçin</option>{poiCategories.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
                 <label>Mesai saatleri<input name="workingHours" value={attributeForm.workingHours || ""} onChange={handleAttributeChange} placeholder="09:00 - 18:00" /></label>
-              </> : <label>Renk<ColorPickerField value={attributeForm.color} onChange={handleAttributeColorChange} /></label>}
+              </> : pendingFeature.endpoint === "transport/stops" ? <label>Güzergah<select name="routeId" value={attributeForm.routeId || ""} disabled={Boolean(selectedTransportRoute)} onChange={handleAttributeChange}><option value="">Güzergah seçin</option>{transportRoutes.map(route => <option key={route.id} value={route.id}>{route.name} · {route.color}</option>)}</select></label> : <label>Renk<ColorPickerField value={attributeForm.color} onChange={handleAttributeColorChange} /></label>}
               <div className="attribute-message">{popupError}</div>
               <div className="attribute-actions">
                 <button type="button" className="secondary-button" onClick={cancelPendingFeature} disabled={isSaving}>
@@ -1897,14 +1947,15 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               />
             </label>
 
-            <label>
+            {selectedFeature.get("type") !== "TransportStop" && <label>
               Renk
               <ColorPickerField
                 value={detailForm.color}
                 onChange={handleDetailColorChange}
                 disabled={!isDetailEditing || isDetailSaving}
               />
-            </label>
+            </label>}
+            {selectedFeature.get("type") === "TransportStop" && <label>Güzergah<select value={detailForm.routeId || ""} onChange={e => setDetailForm(current => ({...current, routeId:e.target.value}))} disabled={!isDetailEditing || isDetailSaving}>{transportRoutes.map(route => <option key={route.id} value={route.id}>{route.name} · {route.color}</option>)}</select></label>}
 
             <div className="detail-field">
               <span>Tip</span>
@@ -1917,17 +1968,18 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               <div className="detail-field"><span>Ekleyen</span><strong>{selectedFeature.get("username") || "-"}</strong></div>
               <div className="detail-field"><span>Oluşturulma</span><strong>{selectedFeature.get("createdDate") ? new Date(selectedFeature.get("createdDate")).toLocaleString("tr-TR") : "-"}</strong></div>
             </>}
+            {selectedFeature.get("type") === "TransportStop" && <><div className="detail-field"><span>Güzergah</span><strong><i className="route-color-dot" style={{background:selectedFeature.get("routeColor")}} />{selectedFeature.get("routeName")}</strong></div><div className="detail-field"><span>Sıra</span><strong>{selectedFeature.get("sequenceNumber")}</strong></div><div className="detail-field"><span>Durum</span><strong>{selectedFeature.get("isActive") ? "Aktif" : "Pasif"}</strong></div><div className="detail-field"><span>Ekleyen</span><strong>{selectedFeature.get("username") || "-"}</strong></div><div className="detail-field"><span>Oluşturulma</span><strong>{selectedFeature.get("createdDate") ? new Date(selectedFeature.get("createdDate")).toLocaleString("tr-TR") : "-"}</strong></div></>}
 
             <div className="attribute-message">{detailError}</div>
 
             <div className="detail-actions">
-              {(selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Update" || p === "Poi.Manage")) && <button type="button" className="secondary-button" onClick={startDetailEditing} disabled={isDetailEditing || isDetailSaving}>
+              {(selectedFeature.get("type") === "TransportStop" ? (userInfo?.permissions ?? []).includes("TransportStop.Update") : selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Update" || p === "Poi.Manage")) && <button type="button" className="secondary-button" onClick={startDetailEditing} disabled={isDetailEditing || isDetailSaving}>
                 Düzenle
               </button>}
-              <button type="button" className="primary-button" onClick={handleDetailSave} disabled={!isDetailEditing || isDetailSaving}>
+              {(selectedFeature.get("type") !== "TransportStop" || (userInfo?.permissions ?? []).includes("TransportStop.Update")) && <button type="button" className="primary-button" onClick={handleDetailSave} disabled={!isDetailEditing || isDetailSaving}>
                 {isDetailSaving && isDetailEditing ? "Kaydediliyor" : "Kaydet"}
-              </button>
-              {(selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Delete" || p === "Poi.Manage")) && <button type="button" className="danger-button" onClick={handleDetailDelete} disabled={isDetailSaving}>
+              </button>}
+              {(selectedFeature.get("type") === "TransportStop" ? (userInfo?.permissions ?? []).includes("TransportStop.Delete") : selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Delete" || p === "Poi.Manage")) && <button type="button" className="danger-button" onClick={handleDetailDelete} disabled={isDetailSaving}>
                 Sil
               </button>}
               <button type="button" className="secondary-button" onClick={closeDetailPopup} disabled={isDetailSaving}>

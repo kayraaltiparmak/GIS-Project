@@ -16,7 +16,15 @@ public static class PermissionSeedService
         new("Poi.Manage", "POI yönetimi", "Tüm POI kayıtlarını yönetme yetkisi"),
         new("PoiCategory.Manage", "POI kategori yönetimi", "POI kategorilerini yönetme yetkisi"),
         new("Poi.Search", "POI arama", "POI kayıtlarında arama yetkisi")
-        ,new("LocationAnalysis.Use", "Konum Analizi", "Konum analizi özelliğini kullanma yetkisi")
+        ,new("LocationAnalysis.Use", "Konum Analizi", "Konum analizi özelliğini kullanma yetkisi"),
+        new("TransportRoute.View", "Güzergah görüntüleme", "Ulaşım güzergahlarını görüntüleme yetkisi"),
+        new("TransportRoute.Create", "Güzergah ekleme", "Ulaşım güzergahı ekleme yetkisi"),
+        new("TransportRoute.Update", "Güzergah güncelleme", "Ulaşım güzergahı güncelleme yetkisi"),
+        new("TransportRoute.Delete", "Güzergah silme", "Ulaşım güzergahını pasife alma yetkisi"),
+        new("TransportStop.View", "Durak görüntüleme", "Ulaşım duraklarını görüntüleme yetkisi"),
+        new("TransportStop.Create", "Durak ekleme", "Ulaşım durağı ekleme yetkisi"),
+        new("TransportStop.Update", "Durak güncelleme", "Ulaşım durağı güncelleme yetkisi"),
+        new("TransportStop.Delete", "Durak silme", "Ulaşım durağını pasife alma yetkisi")
     ];
 
     public static async Task EnsureRequiredPermissionsAsync(IServiceProvider services)
@@ -35,6 +43,8 @@ public static class PermissionSeedService
         await EnsureRoleAsync(context, "Admin", null, now);
         await EnsureRoleAsync(context, "Operator", ["Poi.View", "Poi.Create", "Poi.Update", "Poi.Search", "LocationAnalysis.Use"], now);
         await EnsureRoleAsync(context, "User", ["Poi.View", "Poi.Search", "LocationAnalysis.Use"], now);
+        await EnsureRoleAsync(context, "Transport Operator", ["TransportRoute.View", "TransportRoute.Create", "TransportRoute.Update", "TransportRoute.Delete", "TransportStop.View", "TransportStop.Create", "TransportStop.Update", "TransportStop.Delete"], now);
+        await EnsureRoleAsync(context, "Transport User", ["TransportRoute.View", "TransportStop.View"], now);
     }
 
     private static async Task EnsureRoleAsync(AppDbContext context, string name, string[]? codes, DateTime now)

@@ -460,7 +460,7 @@ function AdminCrudLayout({ title, form, children }) {
 
 function RoleForm({ form, setForm, onSubmit }) {
   return (
-    <form className="admin-form" onSubmit={onSubmit}>
+    <form className="admin-form role-form" onSubmit={onSubmit}>
       <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Rol adı" />
       <input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Açıklama" />
       <label className="admin-check"><input type="checkbox" checked={form.isActive} onChange={(event) => setForm({ ...form, isActive: event.target.checked })} /> Aktif</label>
