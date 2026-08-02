@@ -26,6 +26,7 @@ import { unByKey } from "ol/Observable";
 import Navbar from "./Navbar";
 import TransportRoutePanel from "./TransportRoutePanel";
 import { getRoutes } from "../services/transportService";
+import { joinVehicleRouteGroup, leaveVehicleRouteGroup, subscribeVehicleSimulation, VEHICLE_SIMULATION_EVENTS } from "../services/vehicleSimulationConnection";
 import {
   GEOSERVER_DEBUG,
   GEOSERVER_HEATMAP_STYLE,
@@ -113,6 +114,22 @@ function createTransportRouteStyle(feature, resolution) {
     }));
   }
   return styles;
+}
+
+const VEHICLE_ICON = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="42" height="42" viewBox="0 0 42 42"><circle cx="21" cy="21" r="19" fill="#fff" stroke="#0f172a" stroke-width="2"/><path d="M10 24v-7l4-7h14l4 7v7h-3v5h-5v-4h-6v4h-5v-5z" fill="#2563eb"/><path d="M16 13h10l2 5H14z" fill="#bfdbfe"/><circle cx="15" cy="23" r="2" fill="#fff"/><circle cx="27" cy="23" r="2" fill="#fff"/></svg>'
+);
+
+function createVehicleStyle(feature) {
+  return new Style({
+    image: new Icon({
+      src: VEHICLE_ICON,
+      rotation: feature.get("rotation") || 0,
+      rotateWithView: true,
+      anchor: [0.5, 0.5],
+      scale: 0.9
+    })
+  });
 }
 
 function formatTime(totalSeconds) {
@@ -376,6 +393,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     Line: new VectorSource(),
     Polygon: new VectorSource()
     ,TransportStop: new VectorSource()
+    ,Vehicle: new VectorSource()
   });
   const analysisSourceRef = useRef(new VectorSource());
   const transportRouteSourceRef = useRef(new VectorSource());
@@ -447,6 +465,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const [selectedTransportRoute, setSelectedTransportRoute] = useState(null);
   const [transportRoutes, setTransportRoutes] = useState([]);
   const [selectedTransportRouteId, setSelectedTransportRouteId] = useState(null);
+  const [followedRouteId, setFollowedRouteId] = useState(null);
+  const [vehicleSimulationState, setVehicleSimulationState] = useState(null);
+  const followedRouteIdRef = useRef(null);
+  const previousVehicleCoordinateRef = useRef(null);
 
   useEffect(() => {
     onLogoutRef.current = onLogout;
@@ -455,6 +477,64 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   useEffect(() => {
     userInfoRef.current = userInfo;
   }, [userInfo]);
+
+  useEffect(() => {
+    followedRouteIdRef.current = followedRouteId;
+  }, [followedRouteId]);
+
+  useEffect(() => {
+    if (!selectedTransportRouteId || !canSeeTransportRoutes) return;
+    let active = true;
+    joinVehicleRouteGroup(selectedTransportRouteId).catch(error => {
+      if (active) setPopupError(error.message || "Simülasyon bağlantısı kurulamadı.");
+    });
+    return () => {
+      active = false;
+      leaveVehicleRouteGroup(selectedTransportRouteId).catch(() => {});
+    };
+  }, [selectedTransportRouteId, canSeeTransportRoutes]);
+
+  useEffect(() => {
+    if (followedRouteId == null) return;
+    const activeRouteId = followedRouteId;
+    const handlePosition = payload => {
+      if (Number(payload?.routeId) !== activeRouteId) return;
+      updateVehicleFeature(payload);
+    };
+    const handleStarted = payload => {
+      if (Number(payload?.routeId) !== activeRouteId) return;
+      updateVehicleFeature(payload);
+      setInventoryMessage("Araç simülasyonu başladı.");
+    };
+    const handleCompleted = payload => {
+      if (Number(payload?.routeId) !== activeRouteId) return;
+      updateVehicleFeature(payload);
+      setInventoryMessage("Araç simülasyonu tamamlandı.");
+    };
+    const handleStopped = payload => {
+      if (Number(payload?.routeId) !== activeRouteId) return;
+      updateVehicleFeature(payload);
+      setInventoryMessage("Araç simülasyonu durduruldu.");
+    };
+    const handleFailed = payload => {
+      if (Number(payload?.routeId) !== activeRouteId) return;
+      updateVehicleFeature(payload);
+      setPopupError("Araç simülasyonu sırasında bir hata oluştu.");
+    };
+    const unsubscribers = [
+      subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.positionUpdated, handlePosition),
+      subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.started, handleStarted),
+      subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.completed, handleCompleted),
+      subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.stopped, handleStopped),
+      subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.failed, handleFailed)
+    ];
+    return () => {
+      unsubscribers.forEach(unsubscribe => unsubscribe());
+      leaveVehicleRouteGroup(activeRouteId).catch(() => {});
+      vectorSourcesRef.current.Vehicle.clear();
+      previousVehicleCoordinateRef.current = null;
+    };
+  }, [followedRouteId]);
 
   useEffect(() => {
     if (!(userInfo?.permissions ?? []).includes("Poi.Search") || poiSearch.trim().length < 2) { setPoiSearchResults([]); setPoiSearchError(""); return; }
@@ -530,6 +610,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         zIndex: WMS_Z_INDEX.Selection
       }),
       TransportStop: new VectorLayer({ source: vectorSourcesRef.current.TransportStop, zIndex: WMS_Z_INDEX.Selection + 3 })
+      ,Vehicle: new VectorLayer({ source: vectorSourcesRef.current.Vehicle, zIndex: WMS_Z_INDEX.Analysis + 10, style: createVehicleStyle })
     };
     transportRouteLayerRef.current = new VectorLayer({
       source: transportRouteSourceRef.current,
@@ -575,6 +656,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         vectorLayersRef.current.Poi,
         transportRouteLayerRef.current,
         vectorLayersRef.current.TransportStop,
+        vectorLayersRef.current.Vehicle,
         analysisLayerRef.current
       ],
       view: new View({
@@ -693,6 +775,56 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     source.addFeature(feature);
     setSelectedTransportRouteId(route.routeId);
     mapInstanceRef.current?.getView().fit(feature.getGeometry().getExtent(), { padding: [80, 500, 80, 80], duration: 500, maxZoom: 16 });
+  }
+
+  function updateVehicleFeature(payload, zoomToVehicle = false) {
+    const longitude = Number(payload?.longitude), latitude = Number(payload?.latitude);
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) return;
+    const coordinate = fromLonLat([longitude, latitude]);
+    const source = vectorSourcesRef.current.Vehicle;
+    let feature = source.getFeatures()[0];
+    if (!feature) {
+      feature = new Feature({ geometry: new PointGeometry(coordinate) });
+      feature.setId("simulation-vehicle");
+      source.addFeature(feature);
+    }
+    const previous = previousVehicleCoordinateRef.current;
+    if (previous && (previous[0] !== coordinate[0] || previous[1] !== coordinate[1]))
+      feature.set("rotation", -Math.atan2(coordinate[1] - previous[1], coordinate[0] - previous[0]));
+    previousVehicleCoordinateRef.current = coordinate;
+    feature.getGeometry().setCoordinates(coordinate);
+    const status = payload.status || "Running";
+    feature.setProperties({
+      id: "simulation-vehicle", type: "Vehicle", name: "Araç", routeId: Number(payload.routeId),
+      routeName: payload.routeName || "", progressPercent: Number(payload.progressPercent || 0),
+      status, startedAt: payload.startedAt, updatedAt: payload.updatedAt
+    });
+    feature.changed();
+    const normalized = { ...payload, routeId: Number(payload.routeId), longitude, latitude,
+      progressPercent: Number(payload.progressPercent || 0), status,
+      isRunning: status === "Running", isCompleted: status === "Completed" };
+    setVehicleSimulationState(normalized);
+    if (zoomToVehicle)
+      mapInstanceRef.current?.getView().animate({ center: coordinate, zoom: Math.max(mapInstanceRef.current.getView().getZoom() || 6, 14), duration: 500 });
+  }
+
+  async function toggleVehicleFollow(route, shouldFollow) {
+    try {
+      if (!shouldFollow) {
+        await leaveVehicleRouteGroup(route.id);
+        setFollowedRouteId(null); followedRouteIdRef.current = null;
+        vectorSourcesRef.current.Vehicle.clear(); previousVehicleCoordinateRef.current = null;
+        if (selectedFeature?.get("type") === "Vehicle") closeDetailPopup();
+        return;
+      }
+      await joinVehicleRouteGroup(route.id);
+      setFollowedRouteId(route.id); followedRouteIdRef.current = route.id;
+      if (vehicleSimulationState?.routeId === route.id)
+        updateVehicleFeature(vehicleSimulationState, true);
+      setInventoryMessage(route.name + " güzergahındaki araç takip ediliyor.");
+    } catch (error) {
+      setPopupError(error.message || "Araç takibi başlatılamadı.");
+    }
   }
 
   useEffect(() => {
@@ -1101,6 +1233,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     const visibleTypes = Object.entries(layerVisibilityRef.current ?? layerVisibility)
       .filter(([, isVisible]) => isVisible)
       .map(([type]) => type);
+    if (vectorSourcesRef.current.Vehicle.getFeatures().length > 0) visibleTypes.push("Vehicle");
 
     if (visibleTypes.length === 0) {
       return [];
@@ -1796,7 +1929,23 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       )}
 
       <section className="map-shell">
-        {transportPanelOpen && <TransportRoutePanel refreshKey={queryReloadKey} userInfo={userInfo} onClose={() => { setTransportPanelOpen(false); setSelectedTransportRouteId(null); }} onRouteCalculated={showCalculatedRoute} onRouteSelected={setSelectedTransportRouteId} onAddStop={(route) => { setSelectedTransportRoute(route); setTransportPanelOpen(false); startDrawing("TransportStop"); }} />}
+        {transportPanelOpen && <TransportRoutePanel refreshKey={queryReloadKey} userInfo={userInfo}
+          simulationState={vehicleSimulationState} followedRouteId={followedRouteId}
+          onSimulationState={state => setVehicleSimulationState(state)}
+          onToggleFollow={toggleVehicleFollow}
+          onClose={() => {
+            if (followedRouteId != null) toggleVehicleFollow({ id: followedRouteId, name: "" }, false);
+            setTransportPanelOpen(false); setSelectedTransportRouteId(null);
+          }}
+          onRouteCalculated={showCalculatedRoute}
+          onRouteSelected={routeId => {
+            if (routeId == null && followedRouteId != null) toggleVehicleFollow({ id: followedRouteId, name: "" }, false);
+            setSelectedTransportRouteId(routeId);
+          }}
+          onAddStop={(route) => {
+            if (followedRouteId != null) toggleVehicleFollow({ id: followedRouteId, name: "" }, false);
+            setSelectedTransportRoute(route); setSelectedTransportRouteId(null); setTransportPanelOpen(false); startDrawing("TransportStop");
+          }} />}
         {(selectedTransportRoute || activeTool === "TransportStop") && <div className="transport-map-mode"><span style={{ background: selectedTransportRoute?.color || "#0f766e" }}/><div><strong>Durak ekleme modu aktif</strong><small>{selectedTransportRoute ? selectedTransportRoute.name + " güzergahına durak ekliyorsunuz. Haritada bir nokta seçin." : "Haritada bir nokta seçin."}</small></div><button type="button" onClick={() => { setSelectedTransportRoute(null); setActiveTool(null); cancelPendingFeature(); }}>İptal</button></div>}
         {isDetailEditing && selectedFeature?.get("type") === "TransportStop" && <div className="transport-map-mode transport-edit-mode"><span style={{ background: selectedFeature.get("routeColor") || "#0f766e" }}/><div><strong>Durak taşıma modu aktif</strong><small>Durağı haritada sürükleyin, ardından detay penceresindeki Kaydet düğmesine basın.</small></div></div>}
         {locationPanelOpen && <aside className="location-analysis-panel">
@@ -2014,7 +2163,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               <span>{selectedFeature.get("type")}</span>
             </div>
 
-            <label>
+            {selectedFeature.get("type") !== "Vehicle" && <label>
               Ad
               <input
                 type="text"
@@ -2023,9 +2172,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
                 onChange={handleDetailChange}
                 disabled={!isDetailEditing || isDetailSaving}
               />
-            </label>
+            </label>}
 
-            {selectedFeature.get("type") !== "TransportStop" && <label>
+            {!["TransportStop", "Vehicle"].includes(selectedFeature.get("type")) && <label>
               Renk
               <ColorPickerField
                 value={detailForm.color}
@@ -2047,17 +2196,24 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
               <div className="detail-field"><span>Oluşturulma</span><strong>{selectedFeature.get("createdDate") ? new Date(selectedFeature.get("createdDate")).toLocaleString("tr-TR") : "-"}</strong></div>
             </>}
             {selectedFeature.get("type") === "TransportStop" && <><div className="detail-field"><span>Güzergah</span><strong><i className="route-color-dot" style={{background:selectedFeature.get("routeColor")}} />{selectedFeature.get("routeName")}</strong></div><div className="detail-field"><span>Sıra</span><strong>{selectedFeature.get("sequenceNumber")}</strong></div><div className="detail-field"><span>Durum</span><strong>{selectedFeature.get("isActive") ? "Aktif" : "Pasif"}</strong></div><div className="detail-field"><span>Ekleyen</span><strong>{selectedFeature.get("username") || "-"}</strong></div><div className="detail-field"><span>Oluşturulma</span><strong>{selectedFeature.get("createdDate") ? new Date(selectedFeature.get("createdDate")).toLocaleString("tr-TR") : "-"}</strong></div></>}
+            {selectedFeature.get("type") === "Vehicle" && <>
+              <div className="detail-field"><span>Araç</span><strong>{selectedFeature.get("name") || "Araç"}</strong></div>
+              <div className="detail-field"><span>Güzergah</span><strong>{selectedFeature.get("routeName") || "-"}</strong></div>
+              <div className="detail-field"><span>İlerleme</span><strong>%{Number(selectedFeature.get("progressPercent") || 0).toFixed(1)}</strong></div>
+              <div className="detail-field"><span>Durum</span><strong>{selectedFeature.get("status") || "-"}</strong></div>
+              <div className="detail-field"><span>Güncellendi</span><strong>{selectedFeature.get("updatedAt") ? new Date(selectedFeature.get("updatedAt")).toLocaleString("tr-TR") : "-"}</strong></div>
+            </>}
 
             <div className="attribute-message">{detailError}</div>
 
             <div className="detail-actions">
-              {(selectedFeature.get("type") === "TransportStop" ? (userInfo?.permissions ?? []).includes("TransportStop.Update") : selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Update" || p === "Poi.Manage")) && <button type="button" className="secondary-button" onClick={startDetailEditing} disabled={isDetailEditing || isDetailSaving}>
+              {selectedFeature.get("type") !== "Vehicle" && (selectedFeature.get("type") === "TransportStop" ? (userInfo?.permissions ?? []).includes("TransportStop.Update") : selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Update" || p === "Poi.Manage")) && <button type="button" className="secondary-button" onClick={startDetailEditing} disabled={isDetailEditing || isDetailSaving}>
                 Düzenle
               </button>}
-              {(selectedFeature.get("type") !== "TransportStop" || (userInfo?.permissions ?? []).includes("TransportStop.Update")) && <button type="button" className="primary-button" onClick={handleDetailSave} disabled={!isDetailEditing || isDetailSaving}>
+              {selectedFeature.get("type") !== "Vehicle" && (selectedFeature.get("type") !== "TransportStop" || (userInfo?.permissions ?? []).includes("TransportStop.Update")) && <button type="button" className="primary-button" onClick={handleDetailSave} disabled={!isDetailEditing || isDetailSaving}>
                 {isDetailSaving && isDetailEditing ? "Kaydediliyor" : "Kaydet"}
               </button>}
-              {(selectedFeature.get("type") === "TransportStop" ? (userInfo?.permissions ?? []).includes("TransportStop.Delete") : selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Delete" || p === "Poi.Manage")) && <button type="button" className="danger-button" onClick={handleDetailDelete} disabled={isDetailSaving}>
+              {selectedFeature.get("type") !== "Vehicle" && (selectedFeature.get("type") === "TransportStop" ? (userInfo?.permissions ?? []).includes("TransportStop.Delete") : selectedFeature.get("type") !== "Poi" || (userInfo?.permissions ?? []).some(p => p === "Poi.Delete" || p === "Poi.Manage")) && <button type="button" className="danger-button" onClick={handleDetailDelete} disabled={isDetailSaving}>
                 Sil
               </button>}
               <button type="button" className="secondary-button" onClick={closeDetailPopup} disabled={isDetailSaving}>

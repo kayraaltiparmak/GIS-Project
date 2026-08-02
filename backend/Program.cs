@@ -4,10 +4,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using backend.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+builder.Services.AddSignalR();
 
 builder.Services.AddScoped<ITblPointService, TblPointService>();
 builder.Services.AddScoped<ITblLineService, TblLineService>();
@@ -17,6 +19,16 @@ builder.Services.AddScoped<IUserPermissionService, UserPermissionService>();
 builder.Services.AddScoped<IGeographicPermissionService, GeographicPermissionService>();
 builder.Services.AddScoped<ILocationAnalysisService, LocationAnalysisService>();
 builder.Services.AddScoped<ITransportRouteCalculationService, TransportRouteCalculationService>();
+builder.Services.AddScoped<ITransportRouteAccessService, TransportRouteAccessService>();
+builder.Services.AddOptions<VehicleSimulationOptions>()
+    .Bind(builder.Configuration.GetSection(VehicleSimulationOptions.SectionName))
+    .Validate(x => x.UpdateIntervalMilliseconds > 0, "VehicleSimulation update interval must be positive.")
+    .Validate(x => x.SpeedMetersPerSecond > 0 && double.IsFinite(x.SpeedMetersPerSecond), "VehicleSimulation speed must be positive.")
+    .Validate(x => x.CompletedStateRetentionMinutes > 0, "VehicleSimulation retention must be positive.")
+    .ValidateOnStart();
+builder.Services.AddSingleton<VehicleSimulationService>();
+builder.Services.AddSingleton<IVehicleSimulationService>(services => services.GetRequiredService<VehicleSimulationService>());
+builder.Services.AddHostedService(services => services.GetRequiredService<VehicleSimulationService>());
 builder.Services.AddHttpClient<IOsrmService, OsrmService>((services, client) =>
 {
     var baseUrl = services.GetRequiredService<IConfiguration>()["Osrm:BaseUrl"]
@@ -31,7 +43,8 @@ builder.Services.AddCors(options =>
     {
         policy.WithOrigins("http://localhost:5173")
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              .AllowCredentials();
     });
 });
 
@@ -56,6 +69,17 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             IssuerSigningKey = new SymmetricSecurityKey(
                 Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!))
         };
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(accessToken)
+                    && context.HttpContext.Request.Path.StartsWithSegments("/hubs/vehicle-simulation"))
+                    context.Token = accessToken;
+                return Task.CompletedTask;
+            }
+        };
     });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -77,6 +101,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<VehicleSimulationHub>("/hubs/vehicle-simulation");
 
 await PermissionSeedService.EnsureRequiredPermissionsAsync(app.Services);
 

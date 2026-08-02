@@ -23,3 +23,6 @@ export const getStops = (routeId) => request("/transport/stops" + (routeId ? "?r
 export const createStop = (stop) => request("/transport/stops", { method: "POST", body: JSON.stringify(stop) });
 export const updateStop = (id, stop) => request("/transport/stops/" + id, { method: "PUT", body: JSON.stringify(stop) });
 export const deleteStop = (id) => request("/transport/stops/" + id, { method: "DELETE" });
+export const startRouteSimulation = (routeId) => request("/transport/routes/" + routeId + "/simulation/start", { method: "POST" });
+export const stopRouteSimulation = (routeId) => request("/transport/routes/" + routeId + "/simulation/stop", { method: "POST" });
+export const getRouteSimulationStatus = (routeId) => request("/transport/routes/" + routeId + "/simulation/status");

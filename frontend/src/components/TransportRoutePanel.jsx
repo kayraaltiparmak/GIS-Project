@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { calculateRoute, createRoute, deleteRoute, getRouteById, getRoutes, reorderRouteStops, updateRoute } from "../services/transportService";
+import { calculateRoute, createRoute, deleteRoute, getRouteById, getRouteSimulationStatus, getRoutes, reorderRouteStops, startRouteSimulation, stopRouteSimulation, updateRoute } from "../services/transportService";
 
 const EMPTY_FORM = { name: "", color: "#2563EB", isActive: true };
 const ROUTE_COLORS = ["#2563EB", "#4F46E5", "#7C3AED", "#DB2777", "#E11D48", "#DC2626", "#EA580C", "#D97706", "#16A34A", "#059669", "#0891B2", "#334155"];
@@ -15,13 +15,15 @@ function SortableStop({ stop, disabled }) {
   </li>;
 }
 
-export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRouteCalculated, onRouteSelected, refreshKey }) {
+export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRouteCalculated, onRouteSelected, onSimulationState, onToggleFollow, simulationState, followedRouteId, refreshKey }) {
   const permissions = new Set(userInfo?.permissions ?? []);
   const canView = permissions.has("TransportRoute.View");
   const canCreate = permissions.has("TransportRoute.Create");
   const canUpdate = permissions.has("TransportRoute.Update");
   const canDelete = permissions.has("TransportRoute.Delete");
   const canCalculate = permissions.has("TransportRoute.Calculate");
+  const canStartSimulation = permissions.has("TransportSimulation.Start");
+  const canStopSimulation = permissions.has("TransportSimulation.Stop");
   const [routes, setRoutes] = useState([]);
   const [detail, setDetail] = useState(null);
   const [mode, setMode] = useState("list");
@@ -31,13 +33,22 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRo
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [simulationStatus, setSimulationStatus] = useState(null);
+  const [simulationLoading, setSimulationLoading] = useState(false);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   async function loadRoutes() { setLoading(true); setError(""); try { setRoutes(await getRoutes()); } catch (e) { setError(e.message); } finally { setLoading(false); } }
   useEffect(() => { if (canView) loadRoutes(); else setLoading(false); }, [canView]);
   useEffect(() => { if (!refreshKey || !canView) return; loadRoutes(); if (detail?.id) getRouteById(detail.id).then(setDetail).catch(e => setError(e.message)); }, [refreshKey]);
 
-  async function openDetail(id) { setLoading(true); setError(""); try { const route = await getRouteById(id); setDetail(route); onRouteSelected?.(route.id); setMode("detail"); } catch (e) { setError(e.message); } finally { setLoading(false); } }
+  async function openDetail(id) {
+    setLoading(true); setError("");
+    try {
+      const [route, status] = await Promise.all([getRouteById(id), getRouteSimulationStatus(id)]);
+      setDetail(route); setSimulationStatus(status); onSimulationState?.(status.simulation); onRouteSelected?.(route.id); setMode("detail");
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
   function openCreate() { setForm(EMPTY_FORM); setError(""); setMode("create"); }
   function openEdit(route) { setForm({ name: route.name, color: route.color, isActive: route.isActive }); setDetail(route); setError(""); setMode("edit"); }
   async function submit(event) {
@@ -68,6 +79,31 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRo
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   }
+  async function startSimulation() {
+    if (!detail) return;
+    setSimulationLoading(true); setError(""); setMessage("");
+    try {
+      const response = await startRouteSimulation(detail.id);
+      setSimulationStatus({ routeId: detail.id, isRunning: true, canFollow: true, status: response.simulation.status, simulation: response.simulation });
+      onSimulationState?.(response.simulation);
+      setMessage("Araç simülasyonu başlatıldı.");
+    } catch (e) { setError(e.message); }
+    finally { setSimulationLoading(false); }
+  }
+  async function stopSimulation() {
+    if (!detail) return;
+    setSimulationLoading(true); setError(""); setMessage("");
+    try {
+      await stopRouteSimulation(detail.id);
+      const status = await getRouteSimulationStatus(detail.id);
+      setSimulationStatus(status); onSimulationState?.(status.simulation);
+      setMessage("Simülasyon durdurma isteği gönderildi.");
+    } catch (e) { setError(e.message); }
+    finally { setSimulationLoading(false); }
+  }
+  const liveSimulation = simulationState?.routeId === detail?.id ? simulationState : simulationStatus?.simulation;
+  const simulationRunning = liveSimulation?.isRunning ?? simulationStatus?.isRunning ?? false;
+  const isFollowing = followedRouteId === detail?.id;
 
   if (!canView) return <aside className="transport-panel"><div className="transport-header"><h2>Güzergah Yönetimi</h2><button onClick={onClose}>×</button></div><p className="transport-error">Bu panele erişim yetkiniz yok.</p></aside>;
   return <aside className="transport-panel">
@@ -81,6 +117,12 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRo
     </form> : mode === "detail" && detail ? <div className="transport-detail">
       <button type="button" className="transport-back" onClick={() => { setMode("list"); onRouteSelected?.(null); }}>← Listeye dön</button><div className="route-title"><span style={{ background: detail.color }}/><div><h3>{detail.name}</h3><small>{detail.color} · {detail.stopCount} durak</small></div></div>
       <div className="transport-actions">{canUpdate && <button className="secondary-button" onClick={() => openEdit(detail)}>Düzenle</button>}{canCalculate && <button className="primary-button" onClick={calculate} disabled={saving || detail.stops.filter(x => x.isActive).length < 2} title={detail.stops.filter(x => x.isActive).length < 2 ? "En az iki aktif durak gereklidir." : ""}>{saving ? "Hesaplanıyor…" : "Rotayı Hesapla"}</button>}{permissions.has("TransportStop.Create") && <button className="primary-button" onClick={() => onAddStop({ id: detail.id, name: detail.name, color: detail.color })}>Güzergaha Durak Ekle</button>}</div>
+      <div className="transport-actions simulation-actions">
+        {canStartSimulation && <button className="primary-button" onClick={startSimulation} disabled={simulationLoading || simulationRunning}>{simulationLoading ? "İşleniyor…" : "Simülasyonu Başlat"}</button>}
+        {canStopSimulation && <button className="danger-button" onClick={stopSimulation} disabled={simulationLoading || !simulationRunning}>Simülasyonu Durdur</button>}
+        <button className="secondary-button" onClick={() => onToggleFollow?.(detail, !isFollowing)} disabled={!isFollowing && !simulationRunning}>{isFollowing ? "Takibi Bırak" : "Takip Et"}</button>
+      </div>
+      <small>Simülasyon: {liveSimulation?.status ?? simulationStatus?.status ?? "Başlatılmadı"}{liveSimulation?.progressPercent != null ? ` · %${Number(liveSimulation.progressPercent).toFixed(1)}` : ""}</small>
       {detail.routeCalculationStatus && <small>Rota durumu: {detail.routeCalculationStatus}{detail.distanceMeters != null ? ` · ${(detail.distanceMeters / 1000).toFixed(1)} km` : ""}{detail.durationSeconds != null ? ` · ${Math.round(detail.durationSeconds / 60)} dk` : ""}</small>}
       <h3>Duraklar</h3>{detail.stops.length === 0 ? <div className="transport-empty">Durak bulunamadı.</div> : <DndContext sensors={sensors} onDragEnd={dragEnd}><SortableContext items={detail.stops.map(x => x.id)} strategy={verticalListSortingStrategy}><ol className="transport-stops">{detail.stops.map(stop => <SortableStop key={stop.id} stop={stop} disabled={!canUpdate}/>)}</ol></SortableContext></DndContext>}
     </div> : <div className="transport-list">
