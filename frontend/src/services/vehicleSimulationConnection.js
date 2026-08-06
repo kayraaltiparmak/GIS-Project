@@ -7,7 +7,8 @@ export const VEHICLE_SIMULATION_EVENTS = Object.freeze({
   started: "SimulationStarted",
   completed: "SimulationCompleted",
   stopped: "SimulationStopped",
-  failed: "SimulationFailed"
+  failed: "SimulationFailed",
+  speedChanged: "SimulationSpeedChanged"
 });
 
 let connection;

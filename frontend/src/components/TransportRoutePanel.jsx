@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { calculateRoute, createRoute, deleteRoute, getRouteById, getRouteSimulationStatus, getRoutes, reorderRouteStops, startRouteSimulation, stopRouteSimulation, updateRoute } from "../services/transportService";
+import { calculateRoute, createRoute, deleteRoute, getRouteById, getRouteSimulationStatus, getRoutes, reorderRouteStops, startRouteSimulation, stopRouteSimulation, updateRoute, updateRouteSimulationSpeed } from "../services/transportService";
+import { subscribeVehicleSimulation, VEHICLE_SIMULATION_EVENTS } from "../services/vehicleSimulationConnection";
 
 const EMPTY_FORM = { name: "", color: "#2563EB", isActive: true };
 const ROUTE_COLORS = ["#2563EB", "#4F46E5", "#7C3AED", "#DB2777", "#E11D48", "#DC2626", "#EA580C", "#D97706", "#16A34A", "#059669", "#0891B2", "#334155"];
@@ -35,17 +36,32 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRo
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [simulationStatus, setSimulationStatus] = useState(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
+  const [speedKmh, setSpeedKmh] = useState("40");
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   async function loadRoutes() { setLoading(true); setError(""); try { setRoutes(await getRoutes()); } catch (e) { setError(e.message); } finally { setLoading(false); } }
   useEffect(() => { if (canView) loadRoutes(); else setLoading(false); }, [canView]);
   useEffect(() => { if (!refreshKey || !canView) return; loadRoutes(); if (detail?.id) getRouteById(detail.id).then(setDetail).catch(e => setError(e.message)); }, [refreshKey]);
+  useEffect(() => {
+    if (!detail?.id) return;
+    const routeId = detail.id;
+    return subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.speedChanged, payload => {
+      if (Number(payload?.routeId) !== routeId) return;
+      const nextSpeed = Number(payload.speedKmh);
+      setSpeedKmh(String(nextSpeed));
+      setSimulationStatus(current => current?.simulation ? {
+        ...current,
+        simulation: { ...current.simulation, speedKmh: nextSpeed, updatedAt: payload.updatedAt }
+      } : current);
+    });
+  }, [detail?.id]);
 
   async function openDetail(id) {
     setLoading(true); setError("");
     try {
       const [route, status] = await Promise.all([getRouteById(id), getRouteSimulationStatus(id)]);
       setDetail(route); setSimulationStatus(status); onSimulationState?.(status.simulation); onRouteSelected?.(route.id); setMode("detail");
+      if (status.simulation?.speedKmh != null) setSpeedKmh(String(status.simulation.speedKmh));
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
@@ -81,12 +97,27 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRo
   }
   async function startSimulation() {
     if (!detail) return;
+    const selectedSpeed = Number(speedKmh);
+    if (!Number.isFinite(selectedSpeed) || selectedSpeed < 5 || selectedSpeed > 120) return setError("Hız 5 ile 120 km/h arasında olmalıdır.");
     setSimulationLoading(true); setError(""); setMessage("");
     try {
-      const response = await startRouteSimulation(detail.id);
+      const response = await startRouteSimulation(detail.id, selectedSpeed);
       setSimulationStatus({ routeId: detail.id, isRunning: true, canFollow: true, status: response.simulation.status, simulation: response.simulation });
       onSimulationState?.(response.simulation);
       setMessage("Araç simülasyonu başlatıldı.");
+    } catch (e) { setError(e.message); }
+    finally { setSimulationLoading(false); }
+  }
+  async function updateSimulationSpeed() {
+    if (!detail) return;
+    const selectedSpeed = Number(speedKmh);
+    if (!Number.isFinite(selectedSpeed) || selectedSpeed < 5 || selectedSpeed > 120) return setError("Hız 5 ile 120 km/h arasında olmalıdır.");
+    setSimulationLoading(true); setError(""); setMessage("");
+    try {
+      const response = await updateRouteSimulationSpeed(detail.id, selectedSpeed);
+      setSimulationStatus(current => ({ ...current, status: response.simulation.status, isRunning: response.simulation.isRunning, simulation: response.simulation }));
+      onSimulationState?.(response.simulation);
+      setMessage("Simülasyon hızı güncellendi.");
     } catch (e) { setError(e.message); }
     finally { setSimulationLoading(false); }
   }
@@ -101,9 +132,15 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRo
     } catch (e) { setError(e.message); }
     finally { setSimulationLoading(false); }
   }
-  const liveSimulation = simulationState?.routeId === detail?.id ? simulationState : simulationStatus?.simulation;
+  const externalSimulation = simulationState?.routeId === detail?.id ? simulationState : null;
+  const liveSimulation = externalSimulation
+    ? { ...simulationStatus?.simulation, ...externalSimulation, speedKmh: simulationStatus?.simulation?.speedKmh ?? externalSimulation.speedKmh }
+    : simulationStatus?.simulation;
   const simulationRunning = liveSimulation?.isRunning ?? simulationStatus?.isRunning ?? false;
   const isFollowing = followedRouteId === detail?.id;
+  const displayedSpeed = Number(liveSimulation?.speedKmh ?? 0);
+  const displayedProgress = Number(liveSimulation?.progressPercent ?? 0);
+  const selectedTransportRouteId = detail?.id;
 
   if (!canView) return <aside className="transport-panel"><div className="transport-header"><h2>Güzergah Yönetimi</h2><button onClick={onClose}>×</button></div><p className="transport-error">Bu panele erişim yetkiniz yok.</p></aside>;
   return <aside className="transport-panel">
@@ -117,17 +154,25 @@ export default function TransportRoutePanel({ userInfo, onClose, onAddStop, onRo
     </form> : mode === "detail" && detail ? <div className="transport-detail">
       <button type="button" className="transport-back" onClick={() => { setMode("list"); onRouteSelected?.(null); }}>← Listeye dön</button><div className="route-title"><span style={{ background: detail.color }}/><div><h3>{detail.name}</h3><small>{detail.color} · {detail.stopCount} durak</small></div></div>
       <div className="transport-actions">{canUpdate && <button className="secondary-button" onClick={() => openEdit(detail)}>Düzenle</button>}{canCalculate && <button className="primary-button" onClick={calculate} disabled={saving || detail.stops.filter(x => x.isActive).length < 2} title={detail.stops.filter(x => x.isActive).length < 2 ? "En az iki aktif durak gereklidir." : ""}>{saving ? "Hesaplanıyor…" : "Rotayı Hesapla"}</button>}{permissions.has("TransportStop.Create") && <button className="primary-button" onClick={() => onAddStop({ id: detail.id, name: detail.name, color: detail.color })}>Güzergaha Durak Ekle</button>}</div>
+      <section className="simulation-control">
+      <div className="simulation-metrics">
+        <div><span>Hız</span><strong>{displayedSpeed ? `${displayedSpeed.toFixed(1)} km/h` : "-"}</strong></div>
+        <div><span>Durum</span><strong>{liveSimulation?.status ?? simulationStatus?.status ?? "Başlatılmadı"}</strong></div>
+        <div><span>İlerleme</span><strong>%{displayedProgress.toFixed(1)}</strong></div>
+      </div>
+      <div className="simulation-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={displayedProgress}><span style={{ width: `${Math.min(100, Math.max(0, displayedProgress))}%` }} /></div>
+      {canStartSimulation && <div className="speed-control"><label>Simülasyon hızı <span>km/h</span><input type="number" min="5" max="120" step="0.1" list="simulation-speeds" value={speedKmh} onChange={e => setSpeedKmh(e.target.value)} disabled={simulationLoading}/></label><datalist id="simulation-speeds">{[20,30,40,50,70,90].map(value => <option key={value} value={value}/>)}</datalist>{simulationRunning && <button className="secondary-button" onClick={updateSimulationSpeed} disabled={simulationLoading}>Hızı Güncelle</button>}</div>}
       <div className="transport-actions simulation-actions">
         {canStartSimulation && <button className="primary-button" onClick={startSimulation} disabled={simulationLoading || simulationRunning}>{simulationLoading ? "İşleniyor…" : "Simülasyonu Başlat"}</button>}
         {canStopSimulation && <button className="danger-button" onClick={stopSimulation} disabled={simulationLoading || !simulationRunning}>Simülasyonu Durdur</button>}
         <button className="secondary-button" onClick={() => onToggleFollow?.(detail, !isFollowing)} disabled={!isFollowing && !simulationRunning}>{isFollowing ? "Takibi Bırak" : "Takip Et"}</button>
       </div>
-      <small>Simülasyon: {liveSimulation?.status ?? simulationStatus?.status ?? "Başlatılmadı"}{liveSimulation?.progressPercent != null ? ` · %${Number(liveSimulation.progressPercent).toFixed(1)}` : ""}</small>
+      </section>
       {detail.routeCalculationStatus && <small>Rota durumu: {detail.routeCalculationStatus}{detail.distanceMeters != null ? ` · ${(detail.distanceMeters / 1000).toFixed(1)} km` : ""}{detail.durationSeconds != null ? ` · ${Math.round(detail.durationSeconds / 60)} dk` : ""}</small>}
       <h3>Duraklar</h3>{detail.stops.length === 0 ? <div className="transport-empty">Durak bulunamadı.</div> : <DndContext sensors={sensors} onDragEnd={dragEnd}><SortableContext items={detail.stops.map(x => x.id)} strategy={verticalListSortingStrategy}><ol className="transport-stops">{detail.stops.map(stop => <SortableStop key={stop.id} stop={stop} disabled={!canUpdate}/>)}</ol></SortableContext></DndContext>}
     </div> : <div className="transport-list">
       {canCreate && <button type="button" className="primary-button new-route" onClick={openCreate}>+ Yeni Güzergah</button>}
-      {routes.length === 0 ? <div className="transport-empty">Henüz aktif güzergah bulunmuyor.</div> : routes.map(route => <article className="route-card" key={route.id}><div className="route-title"><span style={{ background: route.color }}/><div><h3>{route.name}</h3><small>{route.color} · {route.stopCount} durak · {route.isActive ? "Aktif" : "Pasif"}</small></div></div><div className="route-card-actions"><button onClick={() => openDetail(route.id)}>Detay</button>{canUpdate && <button onClick={() => openEdit(route)}>Düzenle</button>}{canDelete && <button className="delete-link" onClick={() => setDeleteTarget(route)}>Sil</button>}</div></article>)}
+      {routes.length === 0 ? <div className="transport-empty">Henüz aktif güzergah bulunmuyor.</div> : routes.map(route => <article className={route.id === selectedTransportRouteId ? "route-card selected" : "route-card"} style={{ borderLeftColor: route.color }} key={route.id}><div className="route-title"><span style={{ background: route.color }}/><div><h3>{route.name}</h3><div className="route-badges"><span>{route.stopCount} durak</span><span className={route.isActive ? "active" : ""}>{route.isActive ? "Aktif" : "Pasif"}</span></div></div></div><div className="route-card-actions"><button onClick={() => openDetail(route.id)}>Detay</button>{canUpdate && <button onClick={() => openEdit(route)}>Düzenle</button>}{canDelete && <button className="delete-link" onClick={() => setDeleteTarget(route)}>Sil</button>}</div></article>)}
     </div>}
     {deleteTarget && <div className="transport-confirm"><div><h3>Güzergah silinsin mi?</h3><p><strong>{deleteTarget.name}</strong> ve durakları pasife alınacak.</p><div className="transport-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Vazgeç</button><button className="danger-button" disabled={saving} onClick={confirmDelete}>Sil</button></div></div></div>}
   </aside>;

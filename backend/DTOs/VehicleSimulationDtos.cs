@@ -6,6 +6,7 @@ public sealed record VehiclePositionDto(
     double Longitude,
     double Latitude,
     double ProgressPercent,
+    double SpeedKmh,
     string Status,
     DateTime StartedAt,
     DateTime UpdatedAt);
@@ -16,6 +17,8 @@ public sealed record VehicleSimulationStateDto(
     double Longitude,
     double Latitude,
     double ProgressPercent,
+    double SpeedKmh,
+    double SpeedMetersPerSecond,
     string Status,
     DateTime StartedAt,
     DateTime UpdatedAt,
@@ -34,3 +37,8 @@ public sealed record VehicleSimulationStatusResponse(
 public sealed record VehicleSimulationActionResponse(
     string Message,
     VehicleSimulationStateDto Simulation);
+
+public sealed record VehicleSimulationStartRequest(double? SpeedKmh);
+public sealed record VehicleSimulationSpeedRequest(double SpeedKmh);
+public sealed record VehicleSimulationSpeedChangedDto(
+    int RouteId, double SpeedKmh, DateTime UpdatedAt, int ChangedByUserId);

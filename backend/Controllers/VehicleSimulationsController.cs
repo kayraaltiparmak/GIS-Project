@@ -3,6 +3,7 @@ using backend.DTOs;
 using backend.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace backend.Controllers;
 
@@ -22,17 +23,36 @@ public sealed class VehicleSimulationsController : ControllerBase
         (_simulations, _routeAccess, _permissions, _logger) = (simulations, routeAccess, permissions, logger);
 
     [HttpPost("start")]
-    public async Task<IActionResult> Start(int routeId, CancellationToken cancellationToken)
+    public async Task<IActionResult> Start(int routeId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] VehicleSimulationStartRequest? request,
+        CancellationToken cancellationToken)
     {
         try
         {
             var userId = UserId(); if (userId == null) return Unauthorized();
             if (!await Allowed(userId.Value, TransportPermissionCodes.SimulationStart)) return Forbid();
             if (!await _routeAccess.CanViewAsync(userId.Value, routeId, cancellationToken)) return NotFound("Guzergah bulunamadi veya goruntuleme yetkiniz yok.");
-            var result = await _simulations.StartSimulationAsync(routeId, userId.Value, cancellationToken);
+            var result = await _simulations.StartSimulationAsync(routeId, userId.Value, request?.SpeedKmh, cancellationToken);
             if (result.Conflict) return Conflict(result.Error);
             if (!result.Success || result.State == null) return BadRequest(result.Error);
             return Accepted(new VehicleSimulationActionResponse("Simulasyon baslatildi.", result.State));
+        }
+        catch (OperationCanceledException) { return StatusCode(499); }
+        catch (Exception ex) { return Error(ex); }
+    }
+
+    [HttpPut("speed")]
+    public async Task<IActionResult> UpdateSpeed(int routeId, VehicleSimulationSpeedRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var userId = UserId(); if (userId == null) return Unauthorized();
+            if (!await Allowed(userId.Value, TransportPermissionCodes.SimulationStart)) return Forbid();
+            if (!await _routeAccess.CanViewAsync(userId.Value, routeId, cancellationToken))
+                return NotFound("Guzergah bulunamadi veya goruntuleme yetkiniz yok.");
+            var result = await _simulations.UpdateSpeedAsync(routeId, request.SpeedKmh, userId.Value, cancellationToken);
+            if (!result.Success || result.State == null) return BadRequest(result.Error);
+            return Ok(new VehicleSimulationActionResponse("Simulasyon hizi guncellendi.", result.State));
         }
         catch (OperationCanceledException) { return StatusCode(499); }
         catch (Exception ex) { return Error(ex); }

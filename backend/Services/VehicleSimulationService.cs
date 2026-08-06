@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using backend.Data;
 using backend.DTOs;
 using backend.Hubs;
@@ -46,9 +47,12 @@ public sealed class VehicleSimulationService : IVehicleSimulationService, IHoste
     }
 
     public async Task<VehicleSimulationStartResult> StartSimulationAsync(
-        int routeId, int startedByUserId, CancellationToken cancellationToken)
+        int routeId, int startedByUserId, double? speedKmh, CancellationToken cancellationToken)
     {
         if (routeId <= 0) return new(false, false, "Gecerli bir guzergah kimligi zorunludur.", null);
+        var selectedSpeedKmh = speedKmh ?? _options.EffectiveDefaultSpeedKmh;
+        var speedError = ValidateSpeed(selectedSpeedKmh);
+        if (speedError != null) return new(false, false, speedError, null);
         var routeData = await LoadRouteAsync(routeId, cancellationToken);
         if (routeData.Error != null) return new(false, false, routeData.Error, null);
 
@@ -66,7 +70,8 @@ public sealed class VehicleSimulationService : IVehicleSimulationService, IHoste
         {
             RouteId = routeId, RouteName = routeData.RouteName!, Longitude = first.X, Latitude = first.Y,
             ProgressPercent = 0, Status = VehicleSimulationStatuses.Running, StartedAt = now, UpdatedAt = now,
-            StartedByUserId = startedByUserId, CurrentSegmentIndex = 0, IsRunning = true, IsCompleted = false
+            StartedByUserId = startedByUserId, CurrentSegmentIndex = 0, IsRunning = true, IsCompleted = false,
+            SpeedKmh = selectedSpeedKmh, SpeedMetersPerSecond = selectedSpeedKmh / 3.6
         };
         var entry = new SimulationEntry(state, new CancellationTokenSource(), routeData.Coordinates, routeData.SegmentLengths!, routeData.TotalDistance);
         if (!_simulations.TryAdd(routeId, entry))
@@ -100,6 +105,32 @@ public sealed class VehicleSimulationService : IVehicleSimulationService, IHoste
         return Task.FromResult(new VehicleSimulationStopResult(true, null, ReadState(entry)));
     }
 
+    public async Task<VehicleSimulationSpeedResult> UpdateSpeedAsync(
+        int routeId, double speedKmh, int changedByUserId, CancellationToken cancellationToken)
+    {
+        var speedError = ValidateSpeed(speedKmh);
+        if (speedError != null) return new(false, speedError, GetSimulationState(routeId));
+        if (!_simulations.TryGetValue(routeId, out var entry))
+            return new(false, "Bu guzergah icin calisan bir simulasyon yok.", null);
+
+        VehicleSimulationStateDto state;
+        lock (entry.SyncRoot)
+        {
+            if (!entry.State.IsRunning)
+                return new(false, "Hiz yalnizca aktif bir simulasyonda degistirilebilir.", entry.State.ToDto());
+            entry.State.SpeedKmh = speedKmh;
+            entry.State.SpeedMetersPerSecond = speedKmh / 3.6;
+            entry.State.UpdatedAt = DateTime.UtcNow;
+            state = entry.State.ToDto();
+        }
+
+        await _hub.Clients.Group(VehicleSimulationGroups.ForRoute(routeId)).SendAsync(
+            VehicleSimulationEvents.SpeedChanged,
+            new VehicleSimulationSpeedChangedDto(routeId, state.SpeedKmh, state.UpdatedAt, changedByUserId),
+            cancellationToken);
+        return new(true, null, state);
+    }
+
     public VehicleSimulationStateDto? GetSimulationState(int routeId) =>
         _simulations.TryGetValue(routeId, out var entry) ? ReadState(entry) : null;
 
@@ -107,15 +138,20 @@ public sealed class VehicleSimulationService : IVehicleSimulationService, IHoste
 
     private async Task RunSimulationAsync(SimulationEntry entry)
     {
-        var intervalSeconds = _options.UpdateIntervalMilliseconds / 1000d;
         var travelled = 0d;
         try
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(entry.Cancellation.Token, _shutdown.Token);
+            var lastTimestamp = Stopwatch.GetTimestamp();
             while (travelled < entry.TotalDistance)
             {
                 await Task.Delay(_options.UpdateIntervalMilliseconds, linked.Token);
-                travelled = Math.Min(entry.TotalDistance, travelled + (_options.SpeedMetersPerSecond * intervalSeconds));
+                var currentTimestamp = Stopwatch.GetTimestamp();
+                var elapsedSeconds = Stopwatch.GetElapsedTime(lastTimestamp, currentTimestamp).TotalSeconds;
+                lastTimestamp = currentTimestamp;
+                double currentSpeedMetersPerSecond;
+                lock (entry.SyncRoot) currentSpeedMetersPerSecond = entry.State.SpeedMetersPerSecond;
+                travelled = Math.Min(entry.TotalDistance, travelled + currentSpeedMetersPerSecond * elapsedSeconds);
                 var (coordinate, segmentIndex) = VehicleSimulationGeometry.Interpolate(entry.Coordinates, entry.SegmentLengths, travelled);
                 VehicleSimulationStateDto state;
                 lock (entry.SyncRoot)
@@ -199,7 +235,15 @@ public sealed class VehicleSimulationService : IVehicleSimulationService, IHoste
 
     private static VehiclePositionDto ToPosition(VehicleSimulationStateDto state) =>
         new(state.RouteId, state.RouteName, state.Longitude, state.Latitude, state.ProgressPercent,
-            state.Status, state.StartedAt, state.UpdatedAt);
+            state.SpeedKmh, state.Status, state.StartedAt, state.UpdatedAt);
+
+    private string? ValidateSpeed(double speedKmh)
+    {
+        if (!double.IsFinite(speedKmh)) return "Hiz sayisal ve sonlu bir deger olmalidir.";
+        if (speedKmh < _options.MinimumSpeedKmh || speedKmh > _options.MaximumSpeedKmh)
+            return $"Hiz {_options.MinimumSpeedKmh:g} ile {_options.MaximumSpeedKmh:g} km/h arasinda olmalidir.";
+        return null;
+    }
 
     private static VehicleSimulationStateDto ReadState(SimulationEntry entry)
     {
@@ -258,6 +302,8 @@ public sealed class VehicleSimulationService : IVehicleSimulationService, IHoste
         public double Longitude { get; set; }
         public double Latitude { get; set; }
         public double ProgressPercent { get; set; }
+        public double SpeedKmh { get; set; }
+        public double SpeedMetersPerSecond { get; set; }
         public string Status { get; set; } = "";
         public DateTime StartedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
@@ -266,6 +312,7 @@ public sealed class VehicleSimulationService : IVehicleSimulationService, IHoste
         public bool IsRunning { get; set; }
         public bool IsCompleted { get; set; }
         public VehicleSimulationStateDto ToDto() => new(RouteId, RouteName, Longitude, Latitude, ProgressPercent,
+            SpeedKmh, SpeedMetersPerSecond,
             Status, StartedAt, UpdatedAt, StartedByUserId, CurrentSegmentIndex, IsRunning, IsCompleted);
     }
 

@@ -23,6 +23,8 @@ export const getStops = (routeId) => request("/transport/stops" + (routeId ? "?r
 export const createStop = (stop) => request("/transport/stops", { method: "POST", body: JSON.stringify(stop) });
 export const updateStop = (id, stop) => request("/transport/stops/" + id, { method: "PUT", body: JSON.stringify(stop) });
 export const deleteStop = (id) => request("/transport/stops/" + id, { method: "DELETE" });
-export const startRouteSimulation = (routeId) => request("/transport/routes/" + routeId + "/simulation/start", { method: "POST" });
+export const startRouteSimulation = (routeId, speedKmh) => request("/transport/routes/" + routeId + "/simulation/start", { method: "POST", body: JSON.stringify({ speedKmh }) });
 export const stopRouteSimulation = (routeId) => request("/transport/routes/" + routeId + "/simulation/stop", { method: "POST" });
+export const updateRouteSimulationSpeed = (routeId, speedKmh) => request("/transport/routes/" + routeId + "/simulation/speed", { method: "PUT", body: JSON.stringify({ speedKmh }) });
 export const getRouteSimulationStatus = (routeId) => request("/transport/routes/" + routeId + "/simulation/status");
+export const planJourney = (payload) => request("/journey-planner/plan", { method: "POST", body: JSON.stringify(payload) });

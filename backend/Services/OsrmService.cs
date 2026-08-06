@@ -19,6 +19,20 @@ public sealed class OsrmService : IOsrmService
         var coordinates = string.Join(';', stops.Select(point =>
             string.Create(CultureInfo.InvariantCulture, $"{point.X},{point.Y}")));
         var path = $"route/v1/driving/{coordinates}?overview=full&geometries=geojson&steps=false";
+        return await RequestRouteAsync(path, cancellationToken);
+    }
+
+    public Task<OsrmRoute> GetWalkingRouteAsync(Point start, Point destination, string baseUrl, CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(baseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var serviceUri))
+            throw new InvalidOperationException("Yuruyus rota servisi adresi gecersiz.");
+        var coordinates = string.Create(CultureInfo.InvariantCulture, $"{start.X},{start.Y};{destination.X},{destination.Y}");
+        var path = new Uri(serviceUri, $"route/v1/walking/{coordinates}?overview=full&geometries=geojson&steps=false").ToString();
+        return RequestRouteAsync(path, cancellationToken);
+    }
+
+    private async Task<OsrmRoute> RequestRouteAsync(string path, CancellationToken cancellationToken)
+    {
         HttpResponseMessage response;
         try
         {

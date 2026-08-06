@@ -50,7 +50,8 @@ function Navbar({
   onStartDrawing,
   onToggleHeatmap,
   onLocationAnalysis,
-  onTransportRoutes
+  onTransportRoutes,
+  onJourneyPlanner
 }) {
   const permissions = new Set(userInfo?.permissions ?? []);
   const canOpenAdminPanel =
@@ -107,6 +108,7 @@ function Navbar({
           <button type="button" onClick={onTransportRoutes}>Güzergah Yönetimi</button>
         )}
         {permissions.has("TransportStop.Create") && <button type="button" className={activeTool === "TransportStop" ? "active-nav-tool" : ""} onClick={() => onStartDrawing("TransportStop")}>Durak Ekle</button>}
+        {permissions.has("TransportJourneyPlan.View") && <button type="button" onClick={onJourneyPlanner}>Yol Tarifi</button>}
         {permissions.has("Inventory.Analyze") && (
           <button
             type="button"

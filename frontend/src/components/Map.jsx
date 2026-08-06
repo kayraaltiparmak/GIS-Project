@@ -16,7 +16,7 @@ import Modify from "ol/interaction/Modify";
 import Translate from "ol/interaction/Translate";
 import WKT from "ol/format/WKT";
 import GeoJSON from "ol/format/GeoJSON";
-import { fromLonLat } from "ol/proj";
+import { fromLonLat, toLonLat } from "ol/proj";
 import Style from "ol/style/Style";
 import Stroke from "ol/style/Stroke";
 import Fill from "ol/style/Fill";
@@ -25,6 +25,7 @@ import Icon from "ol/style/Icon";
 import { unByKey } from "ol/Observable";
 import Navbar from "./Navbar";
 import TransportRoutePanel from "./TransportRoutePanel";
+import JourneyPlannerPanel from "./JourneyPlannerPanel";
 import { getRoutes } from "../services/transportService";
 import { joinVehicleRouteGroup, leaveVehicleRouteGroup, subscribeVehicleSimulation, VEHICLE_SIMULATION_EVENTS } from "../services/vehicleSimulationConnection";
 import {
@@ -119,6 +120,19 @@ function createTransportRouteStyle(feature, resolution) {
 const VEHICLE_ICON = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="42" height="42" viewBox="0 0 42 42"><circle cx="21" cy="21" r="19" fill="#fff" stroke="#0f172a" stroke-width="2"/><path d="M10 24v-7l4-7h14l4 7v7h-3v5h-5v-4h-6v4h-5v-5z" fill="#2563eb"/><path d="M16 13h10l2 5H14z" fill="#bfdbfe"/><circle cx="15" cy="23" r="2" fill="#fff"/><circle cx="27" cy="23" r="2" fill="#fff"/></svg>'
 );
+
+function createJourneyStyle(feature) {
+  const role = feature.get("journeyRole"), highlighted = Boolean(feature.get("highlighted"));
+  const routeColor = /^#[0-9a-f]{6}$/i.test(feature.get("routeColor") || "") ? feature.get("routeColor") : "#2563eb";
+  if (["start", "destination", "boarding", "alighting"].includes(role)) {
+    const colors = { start: "#16a34a", destination: "#dc2626", boarding: routeColor, alighting: routeColor };
+    return new Style({ image: new CircleStyle({ radius: highlighted ? 11 : role === "start" || role === "destination" ? 9 : 7,
+      fill: new Fill({ color: colors[role] }), stroke: new Stroke({ color: "#fff", width: 3 }) }) });
+  }
+  const transit = feature.get("journeyType") === "RideTransit";
+  return new Style({ stroke: new Stroke({ color: transit ? routeColor : highlighted ? "#0f172a" : "#64748b",
+    width: highlighted ? (transit ? 8 : 5) : (transit ? 6 : 3), lineDash: transit ? undefined : [8, 7] }) });
+}
 
 function createVehicleStyle(feature) {
   return new Style({
@@ -396,6 +410,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     ,Vehicle: new VectorSource()
   });
   const analysisSourceRef = useRef(new VectorSource());
+  const journeySourceRef = useRef(new VectorSource());
+  const journeyLayerRef = useRef(null);
   const transportRouteSourceRef = useRef(new VectorSource());
   const transportRouteLayerRef = useRef(null);
   const vectorLayersRef = useRef({});
@@ -415,6 +431,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const activeToolRef = useRef(null);
   const pendingFeatureRef = useRef(null);
   const isDetailEditingRef = useRef(false);
+  const journeySelectionModeRef = useRef(null);
   const [activeTool, setActiveTool] = useState(null);
   const [pendingFeature, setPendingFeature] = useState(null);
   const [selectedFeature, setSelectedFeature] = useState(null);
@@ -467,6 +484,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const [selectedTransportRouteId, setSelectedTransportRouteId] = useState(null);
   const [followedRouteId, setFollowedRouteId] = useState(null);
   const [vehicleSimulationState, setVehicleSimulationState] = useState(null);
+  const [journeyPanelOpen, setJourneyPanelOpen] = useState(false);
+  const [journeySelectionMode, setJourneySelectionMode] = useState(null);
+  const [journeyStartPoint, setJourneyStartPoint] = useState(null);
+  const [journeyDestinationPoint, setJourneyDestinationPoint] = useState(null);
   const followedRouteIdRef = useRef(null);
   const previousVehicleCoordinateRef = useRef(null);
 
@@ -481,6 +502,19 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   useEffect(() => {
     followedRouteIdRef.current = followedRouteId;
   }, [followedRouteId]);
+
+  useEffect(() => {
+    journeySelectionModeRef.current = journeySelectionMode;
+    const target = mapInstanceRef.current?.getTargetElement();
+    if (target) target.style.cursor = journeySelectionMode ? "crosshair" : "";
+  }, [journeySelectionMode]);
+
+  useEffect(() => {
+    if (!journeySelectionMode) return;
+    const cancel = event => { if (event.key === "Escape") setJourneySelectionMode(null); };
+    window.addEventListener("keydown", cancel);
+    return () => window.removeEventListener("keydown", cancel);
+  }, [journeySelectionMode]);
 
   useEffect(() => {
     if (!selectedTransportRouteId || !canSeeTransportRoutes) return;
@@ -521,12 +555,22 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       updateVehicleFeature(payload);
       setPopupError("Araç simülasyonu sırasında bir hata oluştu.");
     };
+    const handleSpeedChanged = payload => {
+      if (Number(payload?.routeId) !== activeRouteId) return;
+      const nextSpeed = Number(payload.speedKmh);
+      setVehicleSimulationState(current => current?.routeId === activeRouteId
+        ? { ...current, speedKmh: nextSpeed, updatedAt: payload.updatedAt }
+        : current);
+      const feature = vectorSourcesRef.current.Vehicle.getFeatures()[0];
+      if (feature) { feature.set("speedKmh", nextSpeed); feature.set("updatedAt", payload.updatedAt); feature.changed(); }
+    };
     const unsubscribers = [
       subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.positionUpdated, handlePosition),
       subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.started, handleStarted),
       subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.completed, handleCompleted),
       subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.stopped, handleStopped),
-      subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.failed, handleFailed)
+      subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.failed, handleFailed),
+      subscribeVehicleSimulation(VEHICLE_SIMULATION_EVENTS.speedChanged, handleSpeedChanged)
     ];
     return () => {
       unsubscribers.forEach(unsubscribe => unsubscribe());
@@ -621,6 +665,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       source: analysisSourceRef.current,
       zIndex: WMS_Z_INDEX.Analysis
     });
+    journeyLayerRef.current = new VectorLayer({ source: journeySourceRef.current, zIndex: WMS_Z_INDEX.Analysis + 5, style: createJourneyStyle });
     locationHeatmapLayerRef.current = new TileLayer({
       source: new TileWMS({ url: GEOSERVER_WMS_URL, params: { LAYERS: GEOSERVER_LOCATION_ANALYSIS_LAYER, STYLES: GEOSERVER_LOCATION_ANALYSIS_STYLE, TILED: true }, serverType: "geoserver", crossOrigin: "anonymous" }),
       visible: false, zIndex: WMS_Z_INDEX.Heatmap
@@ -657,6 +702,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         transportRouteLayerRef.current,
         vectorLayersRef.current.TransportStop,
         vectorLayersRef.current.Vehicle,
+        journeyLayerRef.current,
         analysisLayerRef.current
       ],
       view: new View({
@@ -666,6 +712,15 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     });
 
     const clickKey = mapInstanceRef.current.on("singleclick", async (event) => {
+      if (journeySelectionModeRef.current) {
+        const [longitude, latitude] = toLonLat(event.coordinate);
+        const point = { longitude: Number(longitude.toFixed(6)), latitude: Number(latitude.toFixed(6)) };
+        if (journeySelectionModeRef.current === "start") setJourneyStartPoint(point);
+        else setJourneyDestinationPoint(point);
+        journeySelectionModeRef.current = null;
+        setJourneySelectionMode(null);
+        return;
+      }
       if (activeToolRef.current || pendingFeatureRef.current || isDetailEditingRef.current) {
         return;
       }
@@ -695,7 +750,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       mapInstanceRef.current?.setTarget(undefined);
       mapInstanceRef.current = null;
       transportRouteSourceRef.current.clear();
+      journeySourceRef.current.clear();
       transportRouteLayerRef.current = null;
+      journeyLayerRef.current = null;
     };
   }, []);
 
@@ -777,6 +834,80 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     mapInstanceRef.current?.getView().fit(feature.getGeometry().getExtent(), { padding: [80, 500, 80, 80], duration: 500, maxZoom: 16 });
   }
 
+  function syncJourneyMarker(role, point) {
+    const source = journeySourceRef.current;
+    const existing = source.getFeatures().find(feature => feature.get("journeyRole") === role);
+    const longitude = Number(point?.longitude), latitude = Number(point?.latitude);
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || Math.abs(longitude) > 180 || Math.abs(latitude) > 90) {
+      if (existing) source.removeFeature(existing);
+      return;
+    }
+    const coordinate = fromLonLat([longitude, latitude]);
+    if (existing) existing.getGeometry().setCoordinates(coordinate);
+    else {
+      const feature = new Feature({ geometry: new PointGeometry(coordinate) });
+      feature.setProperties({ journeyRole: role }); source.addFeature(feature);
+    }
+  }
+
+  useEffect(() => { syncJourneyMarker("start", journeyStartPoint); }, [journeyStartPoint]);
+  useEffect(() => { syncJourneyMarker("destination", journeyDestinationPoint); }, [journeyDestinationPoint]);
+
+  function clearJourneyResultFeatures() {
+    journeySourceRef.current.getFeatures().filter(feature => !["start", "destination"].includes(feature.get("journeyRole"))).forEach(feature => journeySourceRef.current.removeFeature(feature));
+  }
+
+  function fitJourneyFeatures(features = journeySourceRef.current.getFeatures()) {
+    if (!features.length) return;
+    const temporary = new VectorSource({ features });
+    const extent = temporary.getExtent();
+    if (extent.every(Number.isFinite) && extent[0] <= extent[2] && extent[1] <= extent[3])
+      mapInstanceRef.current?.getView().fit(extent, { padding: [70, 500, 70, 70], duration: 500, maxZoom: 17 });
+  }
+
+  function showJourneyResult(result) {
+    clearJourneyResultFeatures();
+    if (!result?.found) return;
+    let invalidGeometryCount = 0;
+    (result.steps ?? []).forEach(step => {
+      if (!step.geometry) { invalidGeometryCount++; return; }
+      try {
+        const feature = geoJsonFormatRef.current.readFeature({ type: "Feature", geometry: step.geometry, properties: {} }, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+        if (!feature.getGeometry() || feature.getGeometry().isEmpty()) throw new Error("empty geometry");
+        feature.setProperties({ journeyRole: "step", journeyStepOrder: step.order, journeyType: step.type, routeColor: step.routeColor || result.routeColor, highlighted: false });
+        journeySourceRef.current.addFeature(feature);
+      } catch { invalidGeometryCount++; }
+    });
+    [["boarding", result.boardingStop], ["alighting", result.alightingStop]].forEach(([role, stop]) => {
+      if (!stop || !Number.isFinite(Number(stop.longitude)) || !Number.isFinite(Number(stop.latitude))) return;
+      const feature = new Feature({ geometry: new PointGeometry(fromLonLat([Number(stop.longitude), Number(stop.latitude)])) });
+      feature.setProperties({ journeyRole: role, routeColor: result.routeColor, highlighted: false }); journeySourceRef.current.addFeature(feature);
+    });
+    if (invalidGeometryCount) setInventoryMessage(`${invalidGeometryCount} yolculuk geometrisi geçersiz olduğu için haritada gösterilemedi.`);
+    fitJourneyFeatures();
+  }
+
+  function focusJourneyStep(order) {
+    const source = journeySourceRef.current;
+    source.getFeatures().forEach(feature => feature.set("highlighted", feature.get("journeyStepOrder") === order
+      || (order === 2 && ["boarding", "alighting"].includes(feature.get("journeyRole")))));
+    const target = source.getFeatures().filter(feature => feature.get("journeyStepOrder") === order
+      || (order === 2 && ["boarding", "alighting"].includes(feature.get("journeyRole"))));
+    target.forEach(feature => feature.changed()); fitJourneyFeatures(target);
+  }
+
+  function clearJourneyPlanner(close = false) {
+    setJourneySelectionMode(null); journeySelectionModeRef.current = null;
+    setJourneyStartPoint(null); setJourneyDestinationPoint(null); journeySourceRef.current.clear();
+    if (close) setJourneyPanelOpen(false);
+  }
+
+  function openJourneyPlanner() {
+    if (drawInteractionRef.current) mapInstanceRef.current?.removeInteraction(drawInteractionRef.current);
+    drawInteractionRef.current = null; activeToolRef.current = null; setActiveTool(null); cancelPendingFeature();
+    setSelectionFeatures([]); closeDetailPopup(); setTransportPanelOpen(false); setLocationPanelOpen(false); setJourneyPanelOpen(true);
+  }
+
   function updateVehicleFeature(payload, zoomToVehicle = false) {
     const longitude = Number(payload?.longitude), latitude = Number(payload?.latitude);
     if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) return;
@@ -797,7 +928,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     feature.setProperties({
       id: "simulation-vehicle", type: "Vehicle", name: "Araç", routeId: Number(payload.routeId),
       routeName: payload.routeName || "", progressPercent: Number(payload.progressPercent || 0),
-      status, startedAt: payload.startedAt, updatedAt: payload.updatedAt
+      speedKmh: Number(payload.speedKmh || 0), status, startedAt: payload.startedAt, updatedAt: payload.updatedAt
     });
     feature.changed();
     const normalized = { ...payload, routeId: Number(payload.routeId), longitude, latitude,
@@ -1431,6 +1562,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   }
 
   function startDrawing(tool) {
+    setJourneySelectionMode(null);
     if (tool !== "TransportStop") setSelectedTransportRoute(null);
     setSelectionFeatures([]);
     closeDetailPopup();
@@ -1915,6 +2047,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         onToggleHeatmap={toggleHeatmapAnalysis}
         onLocationAnalysis={() => setLocationPanelOpen(true)}
         onTransportRoutes={() => setTransportPanelOpen(true)}
+        onJourneyPlanner={openJourneyPlanner}
       />
       {false && (
       <header className="topbar">
@@ -1929,6 +2062,15 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       )}
 
       <section className="map-shell">
+        {journeyPanelOpen && <JourneyPlannerPanel
+          canPlan={(userInfo?.permissions ?? []).includes("TransportJourneyPlan.View")}
+          startPoint={journeyStartPoint} destinationPoint={journeyDestinationPoint} selectionMode={journeySelectionMode}
+          onStartPointChange={setJourneyStartPoint} onDestinationPointChange={setJourneyDestinationPoint}
+          onSelectionMode={mode => { setActiveTool(null); activeToolRef.current = null; setJourneySelectionMode(mode); }}
+          onResult={showJourneyResult} onClear={() => clearJourneyPlanner(false)}
+          onFocusStep={focusJourneyStep} onShowAll={() => fitJourneyFeatures()}
+          onClose={() => clearJourneyPlanner(true)} />}
+        {journeySelectionMode && <div className="journey-map-mode"><strong>{journeySelectionMode === "start" ? "Başlangıç noktasını seçin" : "Hedef noktasını seçin"}</strong><small>Haritada bir noktaya tıklayın · ESC ile iptal</small></div>}
         {transportPanelOpen && <TransportRoutePanel refreshKey={queryReloadKey} userInfo={userInfo}
           simulationState={vehicleSimulationState} followedRouteId={followedRouteId}
           onSimulationState={state => setVehicleSimulationState(state)}
@@ -2199,6 +2341,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
             {selectedFeature.get("type") === "Vehicle" && <>
               <div className="detail-field"><span>Araç</span><strong>{selectedFeature.get("name") || "Araç"}</strong></div>
               <div className="detail-field"><span>Güzergah</span><strong>{selectedFeature.get("routeName") || "-"}</strong></div>
+              <div className="detail-field"><span>Hız</span><strong>{Number(selectedFeature.get("speedKmh") || 0).toFixed(1)} km/h</strong></div>
               <div className="detail-field"><span>İlerleme</span><strong>%{Number(selectedFeature.get("progressPercent") || 0).toFixed(1)}</strong></div>
               <div className="detail-field"><span>Durum</span><strong>{selectedFeature.get("status") || "-"}</strong></div>
               <div className="detail-field"><span>Güncellendi</span><strong>{selectedFeature.get("updatedAt") ? new Date(selectedFeature.get("updatedAt")).toLocaleString("tr-TR") : "-"}</strong></div>

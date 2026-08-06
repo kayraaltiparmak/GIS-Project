@@ -15,6 +15,7 @@ public static class VehicleSimulationEvents
     public const string Completed = "SimulationCompleted";
     public const string Stopped = "SimulationStopped";
     public const string Failed = "SimulationFailed";
+    public const string SpeedChanged = "SimulationSpeedChanged";
 }
 
 public static class VehicleSimulationGroups
@@ -28,4 +29,5 @@ public static class TransportPermissionCodes
     public const string SimulationStart = "TransportSimulation.Start";
     public const string SimulationStop = "TransportSimulation.Stop";
     public const string SimulationView = "TransportSimulation.View";
+    public const string JourneyPlanView = "TransportJourneyPlan.View";
 }

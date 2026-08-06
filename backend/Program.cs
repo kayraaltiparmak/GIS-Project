@@ -20,10 +20,21 @@ builder.Services.AddScoped<IGeographicPermissionService, GeographicPermissionSer
 builder.Services.AddScoped<ILocationAnalysisService, LocationAnalysisService>();
 builder.Services.AddScoped<ITransportRouteCalculationService, TransportRouteCalculationService>();
 builder.Services.AddScoped<ITransportRouteAccessService, TransportRouteAccessService>();
+builder.Services.AddScoped<IJourneyPlannerService, JourneyPlannerService>();
+builder.Services.AddOptions<JourneyPlannerOptions>()
+    .Bind(builder.Configuration.GetSection(JourneyPlannerOptions.SectionName))
+    .Validate(x => x.DefaultMaximumWalkingDistanceMeters >= 100 && x.DefaultMaximumWalkingDistanceMeters <= x.MaximumAllowedWalkingDistanceMeters, "JourneyPlanner default walking distance is invalid.")
+    .Validate(x => x.MaximumAllowedWalkingDistanceMeters >= 100 && x.MaximumAllowedWalkingDistanceMeters <= 5000, "JourneyPlanner maximum walking distance is invalid.")
+    .Validate(x => x.CandidateStopLimit is >= 1 and <= 100, "JourneyPlanner candidate stop limit is invalid.")
+    .Validate(x => double.IsFinite(x.WalkingSpeedMetersPerSecond) && x.WalkingSpeedMetersPerSecond > 0, "JourneyPlanner walking speed must be positive.")
+    .Validate(x => double.IsFinite(x.TransitAverageSpeedKmh) && x.TransitAverageSpeedKmh > 0, "JourneyPlanner transit speed must be positive.")
+    .Validate(x => !x.UseOsrmWalkingProfile || Uri.TryCreate(x.WalkingOsrmBaseUrl, UriKind.Absolute, out _), "JourneyPlanner walking OSRM URL is required when enabled.")
+    .ValidateOnStart();
 builder.Services.AddOptions<VehicleSimulationOptions>()
     .Bind(builder.Configuration.GetSection(VehicleSimulationOptions.SectionName))
     .Validate(x => x.UpdateIntervalMilliseconds > 0, "VehicleSimulation update interval must be positive.")
-    .Validate(x => x.SpeedMetersPerSecond > 0 && double.IsFinite(x.SpeedMetersPerSecond), "VehicleSimulation speed must be positive.")
+    .Validate(x => x.MinimumSpeedKmh > 0 && x.MaximumSpeedKmh >= x.MinimumSpeedKmh, "VehicleSimulation speed limits are invalid.")
+    .Validate(x => double.IsFinite(x.EffectiveDefaultSpeedKmh) && x.EffectiveDefaultSpeedKmh >= x.MinimumSpeedKmh && x.EffectiveDefaultSpeedKmh <= x.MaximumSpeedKmh, "VehicleSimulation default speed must be within configured limits.")
     .Validate(x => x.CompletedStateRetentionMinutes > 0, "VehicleSimulation retention must be positive.")
     .ValidateOnStart();
 builder.Services.AddSingleton<VehicleSimulationService>();
