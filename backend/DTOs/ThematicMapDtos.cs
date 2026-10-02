@@ -1,0 +1,6 @@
+using System.Text.Json;
+namespace backend.DTOs;
+public sealed class ThematicExtentRequest { public double MinLongitude { get; set; } public double MinLatitude { get; set; } public double MaxLongitude { get; set; } public double MaxLatitude { get; set; } }
+public sealed class ThematicGridCellDto { public string Id { get; set; }=""; public JsonElement Geometry { get; set; } public double CenterLongitude { get; set; } public double CenterLatitude { get; set; } public int NearestStopId { get; set; } public string NearestStopName { get; set; }=""; public double DistanceMeters { get; set; } public double? WalkingDurationMinutes { get; set; } public string Category { get; set; }=""; }
+public sealed class ThematicRouteDto { public int RouteId { get; set; } public string RouteName { get; set; }=""; public string RouteColor { get; set; }=""; public JsonElement Geometry { get; set; } public int ActiveStopCount { get; set; } public double RouteLengthMeters { get; set; } public double StopsPerKilometer { get; set; } public string DensityClass { get; set; }=""; }
+public sealed class ThematicMapResponse<T> { public string ThemeType { get; set; }=""; public IReadOnlyList<T> Features { get; set; }=[]; public object Summary { get; set; }=new(); }

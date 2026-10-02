@@ -9,6 +9,25 @@ const USER_INFO_KEY = "userInfo";
 const SESSION_EXPIRES_AT_KEY = "sessionExpiresAt";
 const SESSION_DURATION_MS = 10 * 60 * 1000;
 const ME_URL = "http://localhost:5291/api/Auth/me";
+const THEME_KEY = "theme";
+
+function getInitialTheme() {
+  const savedTheme = localStorage.getItem(THEME_KEY);
+  if (savedTheme === "light" || savedTheme === "dark") return savedTheme;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function ThemeToggle({ theme, onToggle }) {
+  const isDark = theme === "dark";
+  return (
+    <button type="button" className="theme-toggle" onClick={onToggle}
+      aria-label={isDark ? "Açık moda geç" : "Karanlık moda geç"}
+      title={isDark ? "Açık moda geç" : "Karanlık moda geç"}>
+      <span aria-hidden="true">{isDark ? "☀" : "☾"}</span>
+      <span>{isDark ? "Açık mod" : "Karanlık mod"}</span>
+    </button>
+  );
+}
 
 function getInitialSession() {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -45,6 +64,13 @@ function App() {
   const [remainingSeconds, setRemainingSeconds] = useState(0);
   const [sessionMessage, setSessionMessage] = useState("");
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
+  const [theme, setTheme] = useState(getInitialTheme);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     function handlePopState() {
@@ -184,7 +210,28 @@ function App() {
       permissions.includes("PoiCategory.Manage");
   }
 
+  let pageContent;
+
   if (token && isUserLoading && !userInfo) {
+    pageContent = (
+      <main className="app-loading"><div>Yükleniyor</div></main>
+    );
+  } else if (!token) {
+    pageContent = <Login onLogin={handleLogin} sessionMessage={sessionMessage} />;
+  } else {
+    pageContent = currentPath.startsWith("/admin") && (canOpenAdminPanel() || currentPath === "/admin/pois") ? (
+      <AdminPanel currentPath={currentPath} token={token} userInfo={userInfo}
+        onBackToMap={() => navigateTo("/")} onNavigate={navigateTo} />
+    ) : (
+      <Map remainingSeconds={remainingSeconds} userInfo={userInfo}
+        onAdminOpen={() => navigateTo("/admin")} onLogout={handleLogout} />
+    );
+  }
+
+  return <>{pageContent}<ThemeToggle theme={theme}
+    onToggle={() => setTheme(current => current === "dark" ? "light" : "dark")} /></>;
+
+  /*if (token && isUserLoading && !userInfo) {
     return (
       <main className="app-loading">
         <div>Yükleniyor</div>
@@ -211,7 +258,7 @@ function App() {
       onAdminOpen={() => navigateTo("/admin")}
       onLogout={handleLogout}
     />
-  );
+  );*/
 }
 
 export default App;

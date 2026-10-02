@@ -29,7 +29,8 @@ public static class PermissionSeedService
         new("TransportStop.View", "Durak görüntüleme", "Ulaşım duraklarını görüntüleme yetkisi"),
         new("TransportStop.Create", "Durak ekleme", "Ulaşım durağı ekleme yetkisi"),
         new("TransportStop.Update", "Durak güncelleme", "Ulaşım durağı güncelleme yetkisi"),
-        new("TransportStop.Delete", "Durak silme", "Ulaşım durağını pasife alma yetkisi")
+        new("TransportStop.Delete", "Durak silme", "Ulaşım durağını pasife alma yetkisi"),
+        new("ThematicMap.View", "Tematik Harita", "Tematik harita analizlerini görüntüleme yetkisi")
     ];
 
     public static async Task EnsureRequiredPermissionsAsync(IServiceProvider services)
@@ -47,9 +48,9 @@ public static class PermissionSeedService
         await context.SaveChangesAsync();
         await EnsureRoleAsync(context, "Admin", null, now);
         await EnsureRoleAsync(context, "Operator", ["Poi.View", "Poi.Create", "Poi.Update", "Poi.Search", "LocationAnalysis.Use"], now);
-        await EnsureRoleAsync(context, "User", ["Poi.View", "Poi.Search", "LocationAnalysis.Use"], now);
-        await EnsureRoleAsync(context, "Transport Operator", ["TransportRoute.View", "TransportRoute.Create", "TransportRoute.Update", "TransportRoute.Delete", "TransportRoute.Calculate", "TransportSimulation.Start", "TransportSimulation.Stop", "TransportSimulation.View", "TransportJourneyPlan.View", "TransportStop.View", "TransportStop.Create", "TransportStop.Update", "TransportStop.Delete"], now);
-        await EnsureRoleAsync(context, "Transport User", ["TransportRoute.View", "TransportSimulation.View", "TransportJourneyPlan.View", "TransportStop.View"], now);
+        await EnsureRoleAsync(context, "User", ["Poi.View", "Poi.Search", "LocationAnalysis.Use", "ThematicMap.View"], now);
+        await EnsureRoleAsync(context, "Transport Operator", ["TransportRoute.View", "TransportRoute.Create", "TransportRoute.Update", "TransportRoute.Delete", "TransportRoute.Calculate", "TransportSimulation.Start", "TransportSimulation.Stop", "TransportSimulation.View", "TransportJourneyPlan.View", "TransportStop.View", "TransportStop.Create", "TransportStop.Update", "TransportStop.Delete", "ThematicMap.View"], now);
+        await EnsureRoleAsync(context, "Transport User", ["TransportRoute.View", "TransportSimulation.View", "TransportJourneyPlan.View", "TransportStop.View", "ThematicMap.View"], now);
     }
 
     private static async Task EnsureRoleAsync(AppDbContext context, string name, string[]? codes, DateTime now)

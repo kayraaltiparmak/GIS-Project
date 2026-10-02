@@ -27,6 +27,7 @@ import Navbar from "./Navbar";
 import TransportRoutePanel from "./TransportRoutePanel";
 import JourneyPlannerPanel from "./JourneyPlannerPanel";
 import { getRoutes } from "../services/transportService";
+import { getThematicMap } from "../services/thematicMapService";
 import { joinVehicleRouteGroup, leaveVehicleRouteGroup, subscribeVehicleSimulation, VEHICLE_SIMULATION_EVENTS } from "../services/vehicleSimulationConnection";
 import {
   GEOSERVER_DEBUG,
@@ -182,6 +183,16 @@ function createAnalysisStyle() {
     stroke: new Stroke({ color: "#0f766e", width: 3, lineDash: [8, 6] }),
     fill: new Fill({ color: "rgba(15, 118, 110, 0.16)" })
   });
+}
+
+const THEMATIC_COLORS = { VeryClose:"rgba(22,163,74,.42)", Close:"rgba(132,204,22,.38)", Medium:"rgba(250,204,21,.38)", Far:"rgba(239,68,68,.36)", VeryShort:"rgba(22,163,74,.42)", Short:"rgba(132,204,22,.38)", Long:"rgba(239,68,68,.36)" };
+function createThematicStyle(feature) {
+  if (feature.get("thematicTheme") === "RouteDensity") {
+    const widths={Low:3,Medium:5,High:7,VeryHigh:10}, opacity={Low:"99",Medium:"bb",High:"dd",VeryHigh:"ff"};
+    const color=/^#[0-9a-f]{6}$/i.test(feature.get("routeColor")||"")?feature.get("routeColor"):"#7c3aed";
+    return new Style({stroke:new Stroke({color:color+(opacity[feature.get("densityClass")]||"cc"),width:widths[feature.get("densityClass")]||4})});
+  }
+  return new Style({fill:new Fill({color:THEMATIC_COLORS[feature.get("category")]||"rgba(250,204,21,.38)"}),stroke:new Stroke({color:"rgba(255,255,255,.08)",width:.35})});
 }
 
 function hexToHsl(hex) {
@@ -395,7 +406,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const canSeePolygonLayer = isMapAdmin || ["Polygon.Create", "Polygon.Update", "Polygon.Delete"].some(x => mapPermissions.has(x));
   const canSeeTransportRoutes = isMapAdmin || mapPermissions.has("TransportRoute.View");
   const canUseGeometryQuery = isMapAdmin || canSeePointLayer || canSeeLineLayer || canSeePolygonLayer || mapPermissions.has("Inventory.Analyze");
-  const visibleLayerToggleCount = [canSeePoiLayer, canSeePointLayer, canSeeLineLayer, canSeePolygonLayer, canSeeTransportRoutes].filter(Boolean).length;
+  const canUseThematicMap = mapPermissions.has("ThematicMap.View");
+  const visibleLayerToggleCount = [canSeePoiLayer, canSeePointLayer, canSeeLineLayer, canSeePolygonLayer, canSeeTransportRoutes, canUseThematicMap].filter(Boolean).length;
   const mapElementRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const drawInteractionRef = useRef(null);
@@ -412,6 +424,9 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const analysisSourceRef = useRef(new VectorSource());
   const journeySourceRef = useRef(new VectorSource());
   const journeyLayerRef = useRef(null);
+  const thematicSourceRef = useRef(new VectorSource());
+  const thematicLayerRef = useRef(null);
+  const thematicAbortRef = useRef(null);
   const transportRouteSourceRef = useRef(new VectorSource());
   const transportRouteLayerRef = useRef(null);
   const vectorLayersRef = useRef({});
@@ -444,6 +459,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     Polygon: true
     ,TransportStop: true
     ,TransportRoute: true
+    ,ThematicMap: false
   });
   const [attributeForm, setAttributeForm] = useState({ name: "", color: DEFAULT_COLOR });
   const [poiCategories, setPoiCategories] = useState([]);
@@ -488,6 +504,12 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
   const [journeySelectionMode, setJourneySelectionMode] = useState(null);
   const [journeyStartPoint, setJourneyStartPoint] = useState(null);
   const [journeyDestinationPoint, setJourneyDestinationPoint] = useState(null);
+  const [thematicPanelOpen,setThematicPanelOpen]=useState(false);
+  const [thematicTheme,setThematicTheme]=useState("NearestStopDistance");
+  const [thematicLoading,setThematicLoading]=useState(false);
+  const [thematicError,setThematicError]=useState("");
+  const [thematicResult,setThematicResult]=useState(null);
+  const [thematicPopup,setThematicPopup]=useState(null);
   const followedRouteIdRef = useRef(null);
   const previousVehicleCoordinateRef = useRef(null);
 
@@ -666,6 +688,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       zIndex: WMS_Z_INDEX.Analysis
     });
     journeyLayerRef.current = new VectorLayer({ source: journeySourceRef.current, zIndex: WMS_Z_INDEX.Analysis + 5, style: createJourneyStyle });
+    thematicLayerRef.current = new VectorLayer({source:thematicSourceRef.current,zIndex:WMS_Z_INDEX.Analysis+3,style:createThematicStyle,visible:false,opacity:.78});
     locationHeatmapLayerRef.current = new TileLayer({
       source: new TileWMS({ url: GEOSERVER_WMS_URL, params: { LAYERS: GEOSERVER_LOCATION_ANALYSIS_LAYER, STYLES: GEOSERVER_LOCATION_ANALYSIS_STYLE, TILED: true }, serverType: "geoserver", crossOrigin: "anonymous" }),
       visible: false, zIndex: WMS_Z_INDEX.Heatmap
@@ -703,6 +726,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         vectorLayersRef.current.TransportStop,
         vectorLayersRef.current.Vehicle,
         journeyLayerRef.current,
+        thematicLayerRef.current,
         analysisLayerRef.current
       ],
       view: new View({
@@ -724,6 +748,8 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       if (activeToolRef.current || pendingFeatureRef.current || isDetailEditingRef.current) {
         return;
       }
+      const thematicFeature=mapInstanceRef.current?.forEachFeatureAtPixel(event.pixel,(feature,layer)=>layer===thematicLayerRef.current?feature:null);
+      if(thematicFeature){setThematicPopup(Object.fromEntries(thematicFeature.getKeys().filter(k=>k!=="geometry").map(k=>[k,thematicFeature.get(k)])));setSelectionFeatures([]);closeDetailPopup();return;}
 
       const features = await getSelectableFeaturesAtEvent(event);
 
@@ -753,6 +779,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       journeySourceRef.current.clear();
       transportRouteLayerRef.current = null;
       journeyLayerRef.current = null;
+      thematicAbortRef.current?.abort(); thematicSourceRef.current.clear(); thematicLayerRef.current=null;
     };
   }, []);
 
@@ -970,6 +997,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       vectorLayersRef.current[type]?.setVisible(isVisible);
     });
     transportRouteLayerRef.current?.setVisible(layerVisibility.TransportRoute);
+    thematicLayerRef.current?.setVisible(layerVisibility.ThematicMap && thematicSourceRef.current.getFeatures().length > 0);
   }, [layerVisibility]);
 
   useEffect(() => {
@@ -1649,6 +1677,13 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
     setAnalysisMessage("");
   }
 
+  async function runThematicAnalysis(){
+    if(thematicLoading||!mapInstanceRef.current)return; thematicAbortRef.current?.abort();const controller=new AbortController();thematicAbortRef.current=controller;setThematicLoading(true);setThematicError("");setThematicPopup(null);thematicSourceRef.current.clear();setThematicResult(null);
+    const raw=mapInstanceRef.current.getView().calculateExtent(mapInstanceRef.current.getSize());const min=toLonLat([raw[0],raw[1]]),max=toLonLat([raw[2],raw[3]]);const extent={minLongitude:min[0],minLatitude:min[1],maxLongitude:max[0],maxLatitude:max[1]};
+    try{const data=await getThematicMap(thematicTheme,extent,controller.signal);const features=(data.features||[]).map(item=>{const feature=geoJsonFormatRef.current.readFeature({type:"Feature",geometry:item.geometry,properties:{}},{dataProjection:"EPSG:4326",featureProjection:"EPSG:3857"});Object.entries(item).forEach(([k,v])=>k!=="geometry"&&feature.set(k,v));feature.set("thematicTheme",data.themeType);return feature;});thematicSourceRef.current.addFeatures(features);thematicLayerRef.current?.setVisible(true);setLayerVisibility(v=>({...v,ThematicMap:true}));setThematicResult(data);if(!features.length)setThematicError("Bu alanda gösterilecek sonuç bulunamadı.");}catch(error){if(error.name!=="AbortError")setThematicError(error.message);}finally{if(thematicAbortRef.current===controller){setThematicLoading(false);thematicAbortRef.current=null;}}
+  }
+  function clearThematic(close=false){thematicAbortRef.current?.abort();thematicAbortRef.current=null;thematicSourceRef.current.clear();thematicLayerRef.current?.setVisible(false);setLayerVisibility(v=>({...v,ThematicMap:false}));setThematicResult(null);setThematicError("");setThematicPopup(null);setThematicLoading(false);if(close)setThematicPanelOpen(false);}
+
   function clearEditInteractions() {
     const map = mapInstanceRef.current;
 
@@ -2048,6 +2083,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
         onLocationAnalysis={() => setLocationPanelOpen(true)}
         onTransportRoutes={() => setTransportPanelOpen(true)}
         onJourneyPlanner={openJourneyPlanner}
+        onThematicMap={() => setThematicPanelOpen(true)}
       />
       {false && (
       <header className="topbar">
@@ -2062,6 +2098,7 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
       )}
 
       <section className="map-shell">
+        {thematicPanelOpen&&<div className="thematic-panel"><div className="thematic-header"><div><h2>Tematik Harita</h2><small>Analiz alanı mevcut harita görünümüdür.</small></div><button className="thematic-close-button" type="button" aria-label="Tematik harita panelini kapat" title="Paneli kapat" onClick={()=>{thematicAbortRef.current?.abort();setThematicPanelOpen(false)}}>×</button></div><label>Tema<select value={thematicTheme} onChange={e=>{clearThematic(false);setThematicTheme(e.target.value)}}><option value="NearestStopDistance">En Yakın Durağa Uzaklık</option><option value="WalkingTime">Yürüme Süresi</option><option value="RouteDensity">En Yoğun Güzergahlar</option></select></label><p>{thematicTheme==="NearestStopDistance"?"Haritadaki bölgelerin en yakın toplu taşıma durağına uzaklığını gösterir.":thematicTheme==="WalkingTime"?"Ortalama yürüme hızına göre durağa ulaşım süresini gösterir.":"Güzergahları aktif durak sayılarına göre karşılaştırır."}</p>{thematicTheme==="WalkingTime"&&<small>Tahmini süre, ortalama yürüme hızına göre hesaplanmıştır.</small>}<div className="thematic-actions"><button className="primary-button" type="button" disabled={thematicLoading} onClick={runThematicAnalysis}>{thematicLoading?"Yükleniyor...":"Temayı Göster"}</button><button className="secondary-button" type="button" onClick={()=>clearThematic(false)}>Temizle</button><button className="secondary-button" type="button" disabled={!thematicResult} onClick={()=>{const next=!layerVisibility.ThematicMap;thematicLayerRef.current?.setVisible(next);setLayerVisibility(v=>({...v,ThematicMap:next}))}}>Katmanı Aç/Kapat</button></div>{thematicError&&<div className="thematic-error">{thematicError}</div>}{thematicResult&&<div className="thematic-summary"><strong>Sonuç Özeti</strong>{thematicTheme==="RouteDensity"?<><span>Güzergah: {thematicResult.summary.routeCount}</span><span>En yoğun: {thematicResult.summary.densestRoute||"-"}</span><span>En fazla durak: {thematicResult.summary.maximumStopCount}</span><span>Ortalama durak: {thematicResult.summary.averageStopCount}</span></>:<><span>Hücre: {thematicResult.summary.totalCells}</span><span>Ortalama mesafe: {thematicResult.summary.averageDistanceMeters} m</span><span>Ortalama yürüyüş: {thematicResult.summary.averageWalkingMinutes} dk</span><span>En iyi / zayıf: {thematicResult.summary.bestClassCellCount} / {thematicResult.summary.worstClassCellCount}</span></>}</div>}</div>}
         {journeyPanelOpen && <JourneyPlannerPanel
           canPlan={(userInfo?.permissions ?? []).includes("TransportJourneyPlan.View")}
           startPoint={journeyStartPoint} destinationPoint={journeyDestinationPoint} selectionMode={journeySelectionMode}
@@ -2176,7 +2213,10 @@ function Map({ remainingSeconds, userInfo, onAdminOpen, onLogout }) {
             <input type="checkbox" name="TransportRoute" checked={layerVisibility.TransportRoute} onChange={handleLayerVisibilityChange} />
             Ulaşım Güzergahları
           </label>}
+          {canUseThematicMap&&<label><input type="checkbox" name="ThematicMap" checked={layerVisibility.ThematicMap} disabled={!thematicResult} onChange={handleLayerVisibilityChange}/>Tematik Harita</label>}
         </div>}
+        {thematicResult&&layerVisibility.ThematicMap&&<div className="thematic-legend"><strong>{thematicTheme==="RouteDensity"?"Güzergah Yoğunluğu":thematicTheme==="WalkingTime"?"Yürüme Süresi":"En Yakın Durak"}</strong>{(thematicTheme==="RouteDensity"?[["Low","Düşük"],["Medium","Orta"],["High","Yüksek"],["VeryHigh","Çok yüksek"]]:thematicTheme==="WalkingTime"?[["VeryShort","0–5 dk"],["Short","5–10 dk"],["Medium","10–15 dk"],["Long","15 dk+"]]:[["VeryClose","0–300 m · Çok yakın"],["Close","300–700 m · Yakın"],["Medium","700–1200 m · Orta"],["Far","1200 m+ · Uzak"]]).map(([key,label])=><span key={key}><i style={{background:thematicTheme==="RouteDensity"?"#7c3aed":THEMATIC_COLORS[key]}}/>{label}</span>)}</div>}
+        {thematicPopup&&<div className="thematic-popup"><button onClick={()=>setThematicPopup(null)}>×</button><strong>{thematicPopup.routeName||thematicPopup.nearestStopName}</strong>{thematicPopup.distanceMeters!=null&&<span>Mesafe: {thematicPopup.distanceMeters} m</span>}{thematicPopup.walkingDurationMinutes!=null&&<span>Yaklaşık {thematicPopup.walkingDurationMinutes} dakika yürüyüş</span>}{thematicPopup.activeStopCount!=null&&<><span>Aktif durak: {thematicPopup.activeStopCount}</span><span>Uzunluk: {(thematicPopup.routeLengthMeters/1000).toFixed(2)} km</span><span>Km başına durak: {thematicPopup.stopsPerKilometer}</span></>}<span>Sınıf: {thematicPopup.category||thematicPopup.densityClass}</span></div>}
         {canUseGeometryQuery && <div className="query-panel" aria-label="Sorgulama paneli">
           <div className="query-panel-header">
             <h2>Sorgulama</h2>

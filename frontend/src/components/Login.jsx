@@ -81,9 +81,7 @@ function Login({ onLogin, sessionMessage }) {
       <section className="brand-panel">
         <div className="brand-overlay" />
         <div className="brand-content">
-          <div className="brand-logo">
-            <img src="https://www.basarsoft.com.tr/wp-content/uploads/2024/09/basarsoft-logo.png" alt="Başarsoft" />
-          </div>
+          <div className="brand-name">Kayrasoft</div>
           <div>
             <span className="brand-kicker">Kurumsal GIS Platformu</span>
             <h1>Harita Yönetim Sistemi</h1>

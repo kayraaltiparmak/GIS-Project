@@ -1,4 +1,6 @@
 # .NET build output
+**/bin/
+**/obj/
 backend/bin/
 backend/obj/
 backend/*build-check*/
@@ -13,6 +15,10 @@ frontend/node_modules/
 frontend/.npm-cache/
 
 # Local/editor files
+/.codex_work/
+/.docx_review/
+/tmp/
+/output/
 .vs/
 .vscode/*
 !.vscode/extensions.json

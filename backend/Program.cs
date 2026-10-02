@@ -21,6 +21,11 @@ builder.Services.AddScoped<ILocationAnalysisService, LocationAnalysisService>();
 builder.Services.AddScoped<ITransportRouteCalculationService, TransportRouteCalculationService>();
 builder.Services.AddScoped<ITransportRouteAccessService, TransportRouteAccessService>();
 builder.Services.AddScoped<IJourneyPlannerService, JourneyPlannerService>();
+builder.Services.AddScoped<IThematicMapService, ThematicMapService>();
+builder.Services.AddOptions<ThematicMapOptions>().Bind(builder.Configuration.GetSection(ThematicMapOptions.SectionName))
+    .Validate(x => x.GridCellSizeMeters is >= 50 and <= 5000, "ThematicMap grid size is invalid.")
+    .Validate(x => x.MaximumGridCellCount is >= 1 and <= 10000, "ThematicMap grid limit is invalid.")
+    .Validate(x => double.IsFinite(x.WalkingSpeedMetersPerSecond) && x.WalkingSpeedMetersPerSecond > 0, "ThematicMap walking speed must be positive.").ValidateOnStart();
 builder.Services.AddOptions<JourneyPlannerOptions>()
     .Bind(builder.Configuration.GetSection(JourneyPlannerOptions.SectionName))
     .Validate(x => x.DefaultMaximumWalkingDistanceMeters >= 100 && x.DefaultMaximumWalkingDistanceMeters <= x.MaximumAllowedWalkingDistanceMeters, "JourneyPlanner default walking distance is invalid.")
